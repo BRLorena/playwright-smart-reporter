@@ -273,6 +273,29 @@ function main(): void {
     const origin = req.headers.origin || '';
     const corsHeader = /^https?:\/\/localhost(:\d+)?$/.test(origin) ? origin : '';
 
+    // When live mode is enabled and this is the report HTML, inject SSE URL and run capability
+    if (options.live && ext === '.html') {
+      let body = fs.readFileSync(filePath, 'utf-8');
+      if (body.includes('data-live-mode')) {
+        body = body.replace(/__SSE_URL__/g, '/sse');
+      }
+      if (options.runCommand) {
+        body = body.replace(/__RUN_ENABLED__/g, 'true');
+      }
+      const buf = Buffer.from(body, 'utf-8');
+      const headers: Record<string, string | number> = {
+        'Content-Type': contentType,
+        'Content-Length': buf.byteLength,
+        'Cache-Control': 'no-cache',
+      };
+      if (corsHeader) {
+        headers['Access-Control-Allow-Origin'] = corsHeader;
+      }
+      res.writeHead(200, headers);
+      res.end(buf);
+      return;
+    }
+
     const headers: Record<string, string | number> = {
       'Content-Type': contentType,
       'Content-Length': fs.statSync(filePath).size,

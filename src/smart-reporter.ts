@@ -69,7 +69,7 @@ import { generateExecutivePdf, type PdfThemeName } from './generators/executive-
 import { formatDuration, stripAnsiCodes, sanitizeFilename, detectCIInfo } from './utils';
 import { buildPlaywrightStyleAiPrompt } from './ai/prompt-builder';
 import type { CIInfo } from './types';
-import { LiveWriter, generateLiveDashboard } from './live';
+import { LiveWriter, generateLiveReportPage } from './live';
 
 // ============================================================================
 // Smart Reporter
@@ -227,14 +227,19 @@ class SmartReporter implements Reporter {
     const totalTests = suite.allTests().length;
     this.liveWriter.start(totalTests, this.ciInfo);
 
-    // Generate live dashboard HTML alongside the live results file
-    if (this.options.live?.enabled && this.options.live?.dashboard !== false) {
-      const liveOutputFile = this.options.live?.outputFile ?? '.smart-live-results.jsonl';
-      const dashboardPath = path.resolve(this.outputDir, 'smart-live.html');
-      const dashboardHtml = generateLiveDashboard({ jsonlFile: liveOutputFile });
-      fs.writeFileSync(dashboardPath, dashboardHtml);
-      console.log(`\n📡 Live dashboard: ${dashboardPath}`);
-      console.log(`   Serve for SSE: npx playwright-smart-reporter-serve --live "${dashboardPath}"`);
+    // Write live report page to the main report output path
+    // When tests complete, onEnd() will overwrite this with the full static report
+    if (this.options.live?.enabled) {
+      const reportPath = path.resolve(this.outputDir, this.options.outputFile ?? 'smart-report.html');
+      const liveRelPath = path.relative(path.dirname(reportPath), this.liveWriter.getOutputPath());
+      fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+      fs.writeFileSync(reportPath, generateLiveReportPage({
+        jsonlFile: liveRelPath,
+        title: this.options.branding?.title,
+        theme: this.options.theme?.preset,
+      }));
+      console.log(`\n📡 Live report: ${reportPath}`);
+      console.log(`   Serve for SSE: npx playwright-smart-reporter-serve --live "${reportPath}"`);
     }
   }
 

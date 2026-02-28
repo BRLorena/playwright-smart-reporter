@@ -38,6 +38,10 @@ export class LiveWriter {
     return new LiveWriter({ outputFile: '', noop: true });
   }
 
+  getOutputPath(): string {
+    return this.outputFile;
+  }
+
   start(totalExpected: number, ciInfo?: CIInfo): void {
     if (this.noop) return;
     this.totalExpected = totalExpected;

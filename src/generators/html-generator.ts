@@ -974,6 +974,13 @@ ${hasPro ? `            <div style="height:1px;background:var(--border-subtle);m
             <span class="nav-label">Gallery</span>
           </button>
           ` : ''}
+          ${data.options.live?.enabled ? `
+          <button class="nav-item" data-view="live" onclick="switchView('live')" role="tab" aria-selected="false" aria-controls="view-live">
+            <span class="nav-icon" aria-hidden="true">${icon('radio')}</span>
+            <span class="nav-label">Live</span>
+            <span class="live-nav-dot" id="live-nav-indicator"></span>
+          </button>
+          ` : ''}
         </div>
       </nav>
 
@@ -1189,6 +1196,44 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
         </div>
       </section>
       ` : ''}
+      ${data.options.live?.enabled ? `
+      <!-- Live View -->
+      <section class="view-panel" id="view-live" role="tabpanel" aria-label="Live" style="display: none;">
+        <div class="view-header">
+          <h2 class="view-title">Live Execution</h2>
+          <span class="live-header-badge" id="live-status-badge">
+            <span class="live-header-dot" id="live-header-dot"></span>
+            <span id="live-status-text">Completed</span>
+          </span>
+        </div>
+        <div class="live-run-row" id="live-run-row" style="display:none">
+          <button class="live-run-btn" id="live-run-btn" onclick="runTests()">Run Tests</button>
+        </div>
+        <div class="live-content">
+          <div class="live-elapsed-row">
+            <span class="live-elapsed-label">Elapsed</span>
+            <span class="live-elapsed-value" id="live-elapsed">${formatDuration(totalDuration)}</span>
+          </div>
+          <div class="live-progress-track" id="live-progress-track">
+            <div class="live-seg live-seg-passed" id="live-seg-passed" style="width:${total > 0 ? ((passed / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-failed" id="live-seg-failed" style="width:${total > 0 ? ((failed / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-flaky" id="live-seg-flaky" style="width:${total > 0 ? ((flaky / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-skipped" id="live-seg-skipped" style="width:${total > 0 ? ((skipped / total) * 100).toFixed(1) : 0}%"></div>
+          </div>
+          <div class="live-progress-label" id="live-progress-label">${total} / ${total} tests</div>
+          <div class="live-counters">
+            <div class="live-counter-card live-c-passed"><div class="live-counter-value" id="live-counter-passed">${passed}</div><div class="live-counter-label">Passed</div></div>
+            <div class="live-counter-card live-c-failed"><div class="live-counter-value" id="live-counter-failed">${failed}</div><div class="live-counter-label">Failed</div></div>
+            <div class="live-counter-card live-c-flaky"><div class="live-counter-value" id="live-counter-flaky">${flaky}</div><div class="live-counter-label">Flaky</div></div>
+            <div class="live-counter-card live-c-skipped"><div class="live-counter-value" id="live-counter-skipped">${skipped}</div><div class="live-counter-label">Skipped</div></div>
+          </div>
+          <div class="live-failure-section">
+            <h3>Failures</h3>
+            <div id="live-failure-feed">${results.filter(r => r.status === 'failed' || r.status === 'timedOut').map(r => `<div class="live-failure-item"><div class="live-failure-title">${escapeHtml(r.title)}</div><div class="live-failure-file">${escapeHtml(r.file)}</div>${r.error ? `<div class="live-failure-error">${escapeHtml(r.error.split('\\n')[0].substring(0, 300))}</div>` : ''}</div>`).join('')}</div>
+          </div>
+        </div>
+      </section>
+      ` : ''}
     </main>
   </div>
 
@@ -1228,6 +1273,187 @@ ${scriptBody}
 
 ${traceScript}
   </script>`}
+${data.options.live?.enabled ? `
+  <script>
+  (function initLiveView() {
+    var liveJsonlFile = ${JSON.stringify(escapeHtml(data.options.live.outputFile ?? '.smart-live-results.jsonl'))};
+    var isLiveMode = document.documentElement.hasAttribute('data-live-mode');
+    var liveCompleted = !isLiveMode;
+    var liveStartTime = Date.now();
+    var liveTotalExpected = 0;
+    var liveTimerRunning = isLiveMode;
+
+    if (!isLiveMode) return;
+
+    switchView('live');
+    var badge = document.getElementById('live-status-badge');
+    if (badge) badge.classList.add('running');
+    var statusText = document.getElementById('live-status-text');
+    if (statusText) statusText.textContent = 'Running';
+    var navDot = document.getElementById('live-nav-indicator');
+
+    function tickLiveElapsed() {
+      if (!liveTimerRunning) return;
+      var s = Math.floor((Date.now() - liveStartTime) / 1000);
+      var m = Math.floor(s / 60);
+      var el = document.getElementById('live-elapsed');
+      if (el) el.textContent = m > 0 ? m + 'm ' + (s % 60) + 's' : s + 's';
+      setTimeout(tickLiveElapsed, 1000);
+    }
+    tickLiveElapsed();
+
+    function escLive(s) {
+      var d = document.createElement('div');
+      d.appendChild(document.createTextNode(s));
+      return d.innerHTML;
+    }
+
+    function updateLiveUI(counters) {
+      liveTotalExpected = counters.totalExpected || liveTotalExpected || 1;
+      var completed = (counters.passed||0)+(counters.failed||0)+(counters.flaky||0)+(counters.skipped||0);
+      document.getElementById('live-counter-passed').textContent = counters.passed||0;
+      document.getElementById('live-counter-failed').textContent = counters.failed||0;
+      document.getElementById('live-counter-flaky').textContent = counters.flaky||0;
+      document.getElementById('live-counter-skipped').textContent = counters.skipped||0;
+      document.getElementById('live-seg-passed').style.width = ((counters.passed||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-failed').style.width = ((counters.failed||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-flaky').style.width = ((counters.flaky||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-skipped').style.width = ((counters.skipped||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-progress-label').textContent = completed+' / '+liveTotalExpected+' tests';
+    }
+
+    function addLiveFailure(ev) {
+      var feed = document.getElementById('live-failure-feed');
+      var item = document.createElement('div');
+      item.className = 'live-failure-item';
+      item.innerHTML = '<div class="live-failure-title">'+escLive(ev.title||'')+'</div>'
+        +'<div class="live-failure-file">'+escLive(ev.file||'')+'</div>'
+        +(ev.error ? '<div class="live-failure-error">'+escLive(ev.error.substring(0,500))+'</div>' : '');
+      feed.insertBefore(item, feed.firstChild);
+    }
+
+    function waitForFinalReport() {
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Generating report...';
+      fetch(window.location.href, { cache: 'no-store', method: 'HEAD' })
+        .then(function() { return fetch(window.location.href, { cache: 'no-store' }); })
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+          if (html && html.indexOf('data-live-mode') === -1) {
+            window.location.reload();
+          } else {
+            setTimeout(waitForFinalReport, 1000);
+          }
+        })
+        .catch(function() { setTimeout(waitForFinalReport, 1000); });
+    }
+
+    function onLiveComplete(ev) {
+      liveCompleted = true;
+      liveTimerRunning = false;
+      var b = document.getElementById('live-status-badge');
+      if (b) b.classList.remove('running');
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Completed';
+      if (navDot) navDot.classList.add('stopped');
+      if (ev.counters) updateLiveUI(ev.counters);
+      var runBtn = document.getElementById('live-run-btn');
+      if (runBtn) runBtn.disabled = false;
+      setTimeout(waitForFinalReport, 500);
+    }
+
+    function processLiveEvent(ev) {
+      if (ev.event === 'start') {
+        liveStartTime = Date.now();
+        liveTotalExpected = ev.totalTests || 0;
+        document.getElementById('live-progress-label').textContent = '0 / '+liveTotalExpected+' tests';
+      } else if (ev.event === 'test') {
+        if (ev.counters) updateLiveUI(ev.counters);
+        if (ev.status === 'failed') addLiveFailure(ev);
+      } else if (ev.event === 'complete') {
+        onLiveComplete(ev);
+      }
+    }
+
+    var sseUrl = '__SSE_URL__';
+    var useSse = sseUrl !== '__' + 'SSE_URL__';
+    if (useSse) {
+      var source = new EventSource(sseUrl);
+      source.onmessage = function(e) {
+        try { processLiveEvent(JSON.parse(e.data)); } catch(_) {}
+      };
+    } else {
+      var lastLineCount = 0;
+      function pollLive() {
+        fetch(liveJsonlFile, { cache: 'no-store' })
+          .then(function(r) { return r.text(); })
+          .then(function(text) {
+            var lines = text.trim().split('\\n');
+            for (var i = lastLineCount; i < lines.length; i++) {
+              try { processLiveEvent(JSON.parse(lines[i])); } catch(_) {}
+            }
+            lastLineCount = lines.length;
+          })
+          .catch(function() {});
+      }
+      setInterval(pollLive, 2000);
+      pollLive();
+    }
+
+    // Run Tests button — only shown when served with --run-command
+    var runEnabled = '__RUN_ENABLED__';
+    if (runEnabled === 'true') {
+      var runRow = document.getElementById('live-run-row');
+      if (runRow) runRow.style.display = 'flex';
+    }
+
+    window.runTests = function() {
+      var btn = document.getElementById('live-run-btn');
+      if (!btn || btn.disabled) return;
+      btn.disabled = true;
+
+      // Reset Live UI for a fresh run
+      document.getElementById('live-counter-passed').textContent = '0';
+      document.getElementById('live-counter-failed').textContent = '0';
+      document.getElementById('live-counter-flaky').textContent = '0';
+      document.getElementById('live-counter-skipped').textContent = '0';
+      document.getElementById('live-seg-passed').style.width = '0%';
+      document.getElementById('live-seg-failed').style.width = '0%';
+      document.getElementById('live-seg-flaky').style.width = '0%';
+      document.getElementById('live-seg-skipped').style.width = '0%';
+      document.getElementById('live-progress-label').textContent = '0 / 0 tests';
+      document.getElementById('live-failure-feed').innerHTML = '';
+
+      liveCompleted = false;
+      liveTimerRunning = true;
+      liveStartTime = Date.now();
+      liveTotalExpected = 0;
+      tickLiveElapsed();
+
+      var b = document.getElementById('live-status-badge');
+      if (b) b.classList.add('running');
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Running';
+      if (navDot) navDot.classList.remove('stopped');
+
+      fetch('/run', { method: 'POST' })
+        .then(function(r) {
+          if (r.status === 409) {
+            btn.disabled = false;
+            alert('A test run is already in progress');
+          } else if (!r.ok) {
+            btn.disabled = false;
+            alert('Failed to start tests (HTTP ' + r.status + ')');
+          }
+        })
+        .catch(function() {
+          btn.disabled = false;
+          alert('Failed to reach the server');
+        });
+    };
+  })();
+  </script>
+` : ''}
 ${branding?.footer || !branding?.hidePoweredBy ? `  <footer class="report-footer" style="text-align:center;padding:12px 16px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border-subtle);">
 ${branding?.footer ? `    <div>${escapeHtml(branding.footer)}</div>` : ''}
 ${!branding?.hidePoweredBy ? '    <div>Powered by <a href="https://github.com/gary-parker/playwright-smart-reporter" style="color:var(--accent-blue);text-decoration:none;">Smart Reporter</a></div>' : ''}
@@ -2195,6 +2421,106 @@ ${highContrastOverride}${customOverrides}
     .view-title {
       font-size: 1.25rem;
       font-weight: 600;
+    }
+
+    /* ============================================
+       LIVE VIEW
+    ============================================ */
+    .live-nav-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent-green);
+      animation: livePulse 1.5s ease-in-out infinite;
+      margin-left: auto;
+    }
+    .live-nav-dot.stopped { animation: none; opacity: 0.3; }
+    @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .view-header { display: flex; align-items: center; gap: 0.75rem; }
+    .live-header-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em; padding: 4px 10px; border-radius: 6px;
+      background: rgba(34,197,94,0.12); color: var(--accent-green);
+      border: 1px solid rgba(34,197,94,0.25);
+    }
+    .live-header-badge.running {
+      background: rgba(239,68,68,0.12); color: var(--accent-red);
+      border-color: rgba(239,68,68,0.25);
+    }
+    .live-header-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent-green);
+    }
+    .live-header-badge.running .live-header-dot {
+      background: var(--accent-red);
+      animation: livePulse 1.5s ease-in-out infinite;
+    }
+
+    .live-run-row {
+      padding: 0.75rem 1.5rem 0; display: flex; align-items: center;
+    }
+    .live-run-btn {
+      padding: 0.5rem 1.25rem; border: none; border-radius: 6px;
+      background: var(--accent-green); color: #fff; font-weight: 600;
+      font-size: 0.85rem; cursor: pointer; transition: opacity 0.2s;
+    }
+    .live-run-btn:hover { opacity: 0.85; }
+    .live-run-btn:disabled {
+      opacity: 0.5; cursor: not-allowed;
+    }
+
+    .live-content { padding: 1.5rem; }
+    .live-elapsed-row {
+      display: flex; align-items: center; gap: 0.75rem;
+      margin-bottom: 1rem; font-size: 0.875rem;
+    }
+    .live-elapsed-label { color: var(--text-muted); }
+    .live-elapsed-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+    .live-progress-track {
+      background: var(--bg-card); border-radius: 8px;
+      height: 24px; overflow: hidden; display: flex;
+      margin-bottom: 0.5rem;
+    }
+    .live-seg { height: 100%; transition: width 0.3s ease; }
+    .live-seg-passed { background: var(--accent-green); }
+    .live-seg-failed { background: var(--accent-red); }
+    .live-seg-flaky { background: var(--accent-yellow); }
+    .live-seg-skipped { background: var(--accent-slate, #64748b); }
+    .live-progress-label {
+      text-align: center; font-size: 0.8rem;
+      color: var(--text-muted); margin-bottom: 1.5rem;
+    }
+
+    .live-counters {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1rem; margin-bottom: 2rem;
+    }
+    .live-counter-card {
+      background: var(--bg-card); border-radius: 8px;
+      padding: 1rem; text-align: center;
+    }
+    .live-counter-value { font-size: 2rem; font-weight: 700; }
+    .live-counter-label {
+      font-size: 0.7rem; color: var(--text-muted);
+      text-transform: uppercase; margin-top: 4px; letter-spacing: 0.05em;
+    }
+    .live-c-passed .live-counter-value { color: var(--accent-green); }
+    .live-c-failed .live-counter-value { color: var(--accent-red); }
+    .live-c-flaky .live-counter-value { color: var(--accent-yellow); }
+    .live-c-skipped .live-counter-value { color: var(--accent-slate, #64748b); }
+
+    .live-failure-section h3 { font-size: 1rem; margin-bottom: 0.75rem; }
+    .live-failure-item {
+      background: var(--bg-card); border-left: 4px solid var(--accent-red);
+      border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 0.5rem;
+    }
+    .live-failure-title { font-weight: 600; font-size: 0.875rem; }
+    .live-failure-file { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+    .live-failure-error {
+      font-size: 0.8rem; color: var(--accent-red); margin-top: 6px;
+      font-family: ${monoFont}; white-space: pre-wrap;
+      max-height: 80px; overflow: hidden;
     }
 
     /* ============================================

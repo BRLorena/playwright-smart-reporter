@@ -92,6 +92,7 @@ export interface SmartReporterOptions {
   enableGalleryView?: boolean;
   enableComparison?: boolean;
   enableAIRecommendations?: boolean;
+  enableAISuiteHealth?: boolean;   // Default: true (AI health summary in Overview tab, uses AI quota)
   enableTrendsView?: boolean;
   enableTraceViewer?: boolean; // Enable "View trace" links
   enableHistoryDrilldown?: boolean; // Default: false (stores per-run snapshots for dot-click drilldown)

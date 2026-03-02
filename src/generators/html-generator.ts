@@ -6,7 +6,7 @@
  */
 
 import type { TestResultData, TestHistory, RunComparison, RunSnapshotFile, SmartReporterOptions, FailureCluster, CIInfo, LicenseTier, ThemeConfig, BrandingConfig, QualityGateResult, QualityGateRuleResult, QuarantineEntry } from '../types';
-import { formatDuration, escapeHtml, escapeJsString, sanitizeId } from '../utils';
+import { formatDuration, escapeHtml, escapeJsString, sanitizeId, renderMarkdownLite } from '../utils';
 import { generateTrendChart } from './chart-generator';
 import { generateGroupedTests, generateTestCard, AttentionSets } from './card-generator';
 import { generateGallery, generateGalleryScript } from './gallery-generator';
@@ -36,6 +36,7 @@ export interface HtmlGeneratorData {
   quarantinedTestIds?: Set<string>;
   quarantineEntries?: QuarantineEntry[];
   quarantineThreshold?: number;
+  aiSuiteHealthSummary?: string;
 }
 
 /**
@@ -221,6 +222,7 @@ function generateOverviewContent(
   quarantineEntries?: QuarantineEntry[],
   quarantineThreshold?: number,
   licenseTier?: LicenseTier,
+  aiSuiteHealthSummary?: string,
 ): string {
   // Calculate deltas from comparison
   const prevPassed = comparison?.baselineRun.passed ?? passed;
@@ -431,6 +433,31 @@ function generateOverviewContent(
     </div>
   ` : '');
 
+  // AI Suite Health Summary (Starter feature)
+  const aiHealthHtml = aiSuiteHealthSummary ? `
+    <div class="overview-section ai-health-section">
+      <div class="ai-health-card">
+        <div class="ai-health-header">
+          <span class="section-icon">${icon('bot')}</span>
+          <span class="ai-health-title">AI Health Summary</span>
+          <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
+        </div>
+        <div class="ai-health-body ai-markdown">${renderMarkdownLite(aiSuiteHealthSummary)}</div>
+      </div>
+    </div>
+  ` : (!hasPro ? `
+    <div class="overview-section ai-health-section">
+      <div class="ai-health-card pro-feature-placeholder">
+        <div class="ai-health-header">
+          <span class="section-icon">${icon('bot')}</span>
+          <span class="ai-health-title">AI Health Summary</span>
+          <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
+        </div>
+        <div class="ai-health-placeholder-desc">AI-powered executive summary of your test suite health</div>
+      </div>
+    </div>
+  ` : '');
+
   return `
     <!-- Hero Stats Row -->
     <div class="hero-stats">
@@ -501,6 +528,8 @@ function generateOverviewContent(
         </div>
       </div>
     </div>
+
+    ${aiHealthHtml}
 
     ${qualityGatesHtml}
 
@@ -1064,7 +1093,7 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
           <h2 class="view-title">Overview</h2>
         </div>
         <div class="overview-content">
-          ${generateOverviewContent(results, comparison, failureClusters, passed, failed, skipped, flaky, slow, newTests, total, passRate, totalDuration, history, data.qualityGateResult, data.quarantineEntries, data.quarantineThreshold, licenseTier)}
+          ${generateOverviewContent(results, comparison, failureClusters, passed, failed, skipped, flaky, slow, newTests, total, passRate, totalDuration, history, data.qualityGateResult, data.quarantineEntries, data.quarantineThreshold, licenseTier, data.aiSuiteHealthSummary)}
         </div>
       </section>
 
@@ -4296,6 +4325,43 @@ ${highContrastOverride}${customOverrides}
       background: var(--accent-yellow);
       color: var(--bg-primary);
       border-color: var(--accent-yellow);
+    }
+
+    /* ============================================
+       AI HEALTH SUMMARY CARD
+    ============================================ */
+    .ai-health-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      border-left: 4px solid var(--accent-purple);
+      position: relative;
+    }
+    .ai-health-card.pro-feature-placeholder {
+      opacity: 0.4;
+    }
+    .ai-health-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .ai-health-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+    }
+    .ai-health-body {
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: var(--text-secondary);
+    }
+    .ai-health-body p { margin: 0 0 0.5rem; }
+    .ai-health-body p:last-child { margin-bottom: 0; }
+    .ai-health-placeholder-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
     }
 
     /* ============================================

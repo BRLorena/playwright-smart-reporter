@@ -52,7 +52,7 @@ The free tier includes everything you need for local test reporting. Paid plans 
 | Flaky test quarantine | | ✅ | ✅ |
 | Custom report branding (title, footer, colours) | | ✅ | ✅ |
 | Custom theme colours | | | ✅ |
-| AI health digest | | | ✅ |
+| AI suite health summary | | ✅ | ✅ |
 | Priority support | | | ✅ |
 
 **Get a license at [stagewright.dev](https://stagewright.dev)**
@@ -254,16 +254,18 @@ reporter: [
 ]
 ```
 
-### AI Health Digest
+### AI Suite Health Summary
 
-Get an AI-generated summary of your test suite health, trends, and recommendations:
+An AI-generated executive summary appears at the top of the Overview tab, combining failure clusters, flakiness trends, performance regressions, and historical pass rate data into natural-language insights. Enabled by default for Starter and Pro users.
+
+To disable (e.g., to preserve AI quota):
 
 ```typescript
 reporter: [
   ['playwright-smart-reporter', {
     outputFile: 'smart-report.html',
     licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
-    enableAIRecommendations: true,
+    enableAISuiteHealth: false,  // Disable AI health summary (saves 1 AI request per run)
   }],
 ]
 ```
@@ -298,6 +300,7 @@ reporter: [
     enableTrendsView: true,
     enableTraceViewer: true,
     enableHistoryDrilldown: false,
+    enableAISuiteHealth: true,      // AI health summary in Overview tab (Starter+, uses 1 AI request)
     enableNetworkLogs: true,
 
     // Step and path options
@@ -620,7 +623,7 @@ Enable `cspSafe: true` to save attachments as files instead of embedding, or red
 ```bash
 npm install
 npm run build
-npm test        # 626 tests
+npm test        # 666 tests
 npm run test:demo
 ```
 

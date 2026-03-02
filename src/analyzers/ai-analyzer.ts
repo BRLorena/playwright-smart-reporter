@@ -1,4 +1,4 @@
-import type { TestResultData, TestRecommendation, FailureCluster, SuiteStats, LicenseTier } from '../types';
+import type { TestResultData, TestRecommendation, FailureCluster, SuiteStats, LicenseTier, RunSummary } from '../types';
 
 export interface AIAnalyzerConfig {
   licenseKey?: string;
@@ -96,6 +96,44 @@ export class AIAnalyzer {
     }
   }
 
+  async analyzeSuiteHealth(
+    results: TestResultData[],
+    stats: SuiteStats,
+    failureClusters: FailureCluster[],
+    historySummaries: RunSummary[],
+  ): Promise<string | undefined> {
+    if (!this.isAvailable() || this.rateLimited) return undefined;
+
+    console.log('\n   Generating AI suite health summary...');
+
+    const flakyTests = results.filter(r => r.flakinessScore !== undefined && r.flakinessScore >= 0.3);
+    const slowTests = results.filter(r => r.performanceTrend?.startsWith('↑'));
+    const retryTests = results.filter(r => r.retryInfo?.needsAttention);
+
+    // Build pass-rate trend from recent history
+    const recentRuns = historySummaries.slice(-5);
+    const trendLine = recentRuns.length > 0
+      ? recentRuns.map(s => `${s.passRate}%`).join(' → ') + ` → ${stats.passRate}% (current)`
+      : `${stats.passRate}% (no prior history)`;
+
+    const prompt = this.buildSuiteHealthPrompt(stats, failureClusters, flakyTests, slowTests, retryTests, trendLine);
+
+    try {
+      const result = await this.callProxy(prompt, 'suite-health');
+      if (!this.quotaLogged) {
+        this.quotaLogged = true;
+        console.log(`   AI quota remaining: ${result.remaining} (resets ${new Date(result.resetAt).toISOString()})`);
+      }
+      console.log('   Suite health summary generated');
+      return result.suggestion;
+    } catch (err) {
+      if (!this.rateLimited) {
+        console.error('Failed to generate suite health summary:', err);
+      }
+      return undefined;
+    }
+  }
+
   generateRecommendations(results: TestResultData[], stats: SuiteStats): TestRecommendation[] {
     const recommendations: TestRecommendation[] = [];
 
@@ -170,7 +208,7 @@ export class AIAnalyzer {
     return recommendations.sort((a, b) => b.priority - a.priority);
   }
 
-  private async callProxy(prompt: string, type: 'failure' | 'cluster'): Promise<{ suggestion: string; remaining: number; resetAt: number }> {
+  private async callProxy(prompt: string, type: 'failure' | 'cluster' | 'suite-health'): Promise<{ suggestion: string; remaining: number; resetAt: number }> {
     const response = await fetch(this.proxyUrl, {
       method: 'POST',
       headers: {
@@ -224,5 +262,50 @@ Example Error:
 ${cluster.tests[0].error || 'Unknown error'}
 
 Provide a brief, actionable suggestion to fix these failures.`;
+  }
+
+  private buildSuiteHealthPrompt(
+    stats: SuiteStats,
+    clusters: FailureCluster[],
+    flakyTests: TestResultData[],
+    slowTests: TestResultData[],
+    retryTests: TestResultData[],
+    trendLine: string,
+  ): string {
+    const clusterSummary = clusters.length > 0
+      ? clusters.slice(0, 5).map(c => `- ${c.errorType} (${c.count} tests)`).join('\n')
+      : 'None';
+
+    const flakyList = flakyTests.length > 0
+      ? flakyTests.slice(0, 5).map(t => `- ${t.title} (${Math.round((t.flakinessScore ?? 0) * 100)}% failure rate)`).join('\n')
+      : 'None';
+
+    const slowList = slowTests.length > 0
+      ? slowTests.slice(0, 5).map(t => `- ${t.title} (${t.performanceTrend})`).join('\n')
+      : 'None';
+
+    return `You are a test suite health analyst. Write a concise executive summary (2-4 sentences) of this Playwright test suite's health. Use natural language, be specific about numbers, and highlight the most actionable insight. Do not use bullet points or headers — write flowing prose.
+
+Suite Stats:
+- Total: ${stats.total} tests
+- Passed: ${stats.passed}, Failed: ${stats.failed}, Skipped: ${stats.skipped}
+- Flaky: ${stats.flaky}, Slow: ${stats.slow}
+- Pass Rate: ${stats.passRate}%
+- Average Stability: ${stats.averageStability}/100
+
+Pass Rate Trend: ${trendLine}
+
+Failure Clusters:
+${clusterSummary}
+
+Flaky Tests:
+${flakyList}
+
+Performance Regressions:
+${slowList}
+
+Tests Needing Retries: ${retryTests.length}
+
+Write the summary now.`;
   }
 }

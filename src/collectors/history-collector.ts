@@ -41,6 +41,7 @@ export class HistoryCollector {
       enableGalleryView: options.enableGalleryView ?? true,
       enableComparison: options.enableComparison ?? true,
       enableAIRecommendations: options.enableAIRecommendations ?? true,
+      enableAISuiteHealth: options.enableAISuiteHealth ?? true,
       enableTrendsView: options.enableTrendsView ?? true,
       enableTraceViewer: options.enableTraceViewer ?? true,
       enableHistoryDrilldown: options.enableHistoryDrilldown ?? false,

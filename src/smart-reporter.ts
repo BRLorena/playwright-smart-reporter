@@ -507,10 +507,32 @@ class SmartReporter implements Reporter {
     // Run AI analysis on failures and clusters if enabled (Starter feature)
     const options = this.historyCollector.getOptions();
     const hasProForAI = LicenseValidator.hasFeature(this.license, 'pro');
+    let aiSuiteHealthSummary: string | undefined;
     if (hasProForAI && options.enableAIRecommendations !== false) {
       await this.aiAnalyzer.analyzeFailed(this.results);
       if (failureClusters.length > 0) {
         await this.aiAnalyzer.analyzeClusters(failureClusters);
+      }
+      // AI Suite Health Summary (Starter feature, opt-out with enableAISuiteHealth: false)
+      if (options.enableAISuiteHealth !== false) {
+        const passed = this.results.filter(r => r.status === 'passed' || r.outcome === 'expected' || r.outcome === 'flaky').length;
+        const failed = this.results.filter(r => r.outcome === 'unexpected' && (r.status === 'failed' || r.status === 'timedOut')).length;
+        const skipped = this.results.filter(r => r.status === 'skipped').length;
+        const flakyCount = this.results.filter(r => r.outcome === 'flaky' || (r.flakinessScore !== undefined && r.flakinessScore >= 0.3)).length;
+        const slowCount = this.results.filter(r => r.performanceTrend?.startsWith('↑')).length;
+        const needsRetry = this.results.filter(r => r.retryInfo?.needsAttention).length;
+        const total = this.results.length;
+        const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
+        const avgStability = this.results.reduce((sum, r) => sum + (r.stabilityScore?.overall ?? 100), 0) / Math.max(total, 1);
+        const suiteStats = {
+          total, passed, failed, skipped,
+          flaky: flakyCount, slow: slowCount, needsRetry,
+          passRate, averageStability: Math.round(avgStability),
+        };
+        const historySummaries = this.historyCollector.getHistory().summaries ?? [];
+        aiSuiteHealthSummary = await this.aiAnalyzer.analyzeSuiteHealth(
+          this.results, suiteStats, failureClusters, historySummaries,
+        );
       }
     } else if (!hasProForAI && options.enableAIRecommendations !== false) {
       const failedCount = this.results.filter(r => r.status === 'failed' || r.status === 'timedOut').length;
@@ -683,6 +705,7 @@ class SmartReporter implements Reporter {
 	      quarantinedTestIds,
 	      quarantineEntries: quarantineResult?.entries,
 	      quarantineThreshold: this.options.quarantine?.threshold,
+	      aiSuiteHealthSummary,
 	    };
 
     // Generate and save HTML report (with optional companion CSS/JS for CSP-safe mode)

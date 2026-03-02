@@ -279,6 +279,72 @@ describe('html-generator', () => {
       // Should use placeholder instead
       expect(testsJson).toContain('[base64-screenshot]');
     });
+
+    it('renders AI suite health summary when provided', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'pro',
+        aiSuiteHealthSummary: 'Your suite is healthy with a 90% pass rate.',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('AI Health Summary');
+      expect(html).toContain('Your suite is healthy with a 90% pass rate.');
+      expect(html).toContain('ai-health-card');
+      expect(html).toContain('>Starter</span>');
+    });
+
+    it('renders AI suite health summary for starter tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'starter',
+        aiSuiteHealthSummary: 'Suite looks good.',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('AI Health Summary');
+      expect(html).toContain('Suite looks good.');
+      expect(html).toContain('>Starter</span>');
+    });
+
+    it('shows placeholder for community tier without AI summary', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('ai-health-card pro-feature-placeholder');
+      expect(html).toContain('AI-powered executive summary');
+    });
+
+    it('does not render AI health section for pro tier without summary', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'pro',
+      };
+
+      const { html } = generateHtml(data);
+
+      // CSS will have the class names, but the overview content should not have the card
+      expect(html).not.toContain('AI Health Summary</span>');
+      expect(html).not.toContain('AI-powered executive summary');
+    });
   });
 });
 

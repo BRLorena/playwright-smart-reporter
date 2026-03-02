@@ -115,6 +115,7 @@ vi.mock('./analyzers', () => ({
   AIAnalyzer: vi.fn().mockImplementation(() => ({
     analyzeFailed: vi.fn().mockResolvedValue(undefined),
     analyzeClusters: vi.fn().mockResolvedValue(undefined),
+    analyzeSuiteHealth: vi.fn().mockResolvedValue(undefined),
   })),
 }));
 

@@ -3,7 +3,7 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { exec, type ChildProcess } from 'child_process';
 import { buildSseHandler } from '../live/sse-handler';
 
 const MIME_TYPES: Record<string, string> = {
@@ -160,9 +160,11 @@ function main(): void {
 
   let sseHandler: ReturnType<typeof buildSseHandler> | null = null;
   if (options.live) {
-    const liveFilePath = path.resolve(dir, options.liveFile);
+    const liveFilePath = path.resolve(process.cwd(), options.liveFile);
     sseHandler = buildSseHandler(liveFilePath);
   }
+
+  let runChild: ChildProcess | null = null;
 
   const server = http.createServer((req, res) => {
     // SSE endpoint for live reporting
@@ -177,6 +179,25 @@ function main(): void {
       const client = { write: (data: string) => res.write(data), end: () => res.end() };
       sseHandler.addClient(client);
       req.on('close', () => { sseHandler!.removeClient(client); });
+      return;
+    }
+
+    // Cancel test run endpoint
+    if (req.url === '/run' && req.method === 'DELETE' && options.runCommand) {
+      const remoteAddr = req.socket.remoteAddress || '';
+      if (!remoteAddr.includes('127.0.0.1') && !remoteAddr.includes('::1')) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Only localhost requests allowed' }));
+        return;
+      }
+      if (!options.running || !runChild) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'No test run in progress' }));
+        return;
+      }
+      runChild.kill('SIGTERM');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'cancelled' }));
       return;
     }
 
@@ -199,17 +220,20 @@ function main(): void {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'started', command: options.runCommand }));
 
-      const child = exec(options.runCommand, { cwd: process.cwd() }, (err) => {
+      runChild = exec(options.runCommand, { cwd: process.cwd() }, (err) => {
         options.running = false;
-        if (err) {
+        runChild = null;
+        if (err && err.killed) {
+          console.log('\n  Test run cancelled');
+        } else if (err) {
           console.log(`\n  Test run finished with exit code ${err.code ?? 1}`);
         } else {
           console.log('\n  Test run finished successfully');
         }
       });
 
-      child.stdout?.on('data', (data) => process.stdout.write(data));
-      child.stderr?.on('data', (data) => process.stderr.write(data));
+      runChild.stdout?.on('data', (data) => process.stdout.write(data));
+      runChild.stderr?.on('data', (data) => process.stderr.write(data));
       return;
     }
 

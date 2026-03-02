@@ -362,6 +362,86 @@ describe('AIAnalyzer', () => {
     });
   });
 
+  describe('analyzeSuiteHealth', () => {
+    it('returns undefined when not available', async () => {
+      const analyzer = new AIAnalyzer({ tier: 'community' });
+      const stats = createSuiteStats();
+
+      const result = await analyzer.analyzeSuiteHealth([], stats, [], []);
+
+      expect(result).toBeUndefined();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('calls proxy with suite-health type and returns summary', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockFetch.mockResolvedValueOnce(mockProxyResponse('Your suite has 3 recurring failures in auth flows.'));
+
+      const analyzer = new AIAnalyzer({ licenseKey: 'key', tier: 'pro' });
+      const stats = createSuiteStats({ failed: 3, passRate: 70 });
+      const clusters = [createFailureCluster({ count: 3, errorType: 'Authentication Error' })];
+      const flakyResults = [createTestResult({ flakinessScore: 0.5 })];
+
+      const result = await analyzer.analyzeSuiteHealth(flakyResults, stats, clusters, []);
+
+      expect(result).toBe('Your suite has 3 recurring failures in auth flows.');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.type).toBe('suite-health');
+      expect(body.prompt).toContain('Pass Rate: 70%');
+      expect(body.prompt).toContain('Authentication Error');
+    });
+
+    it('includes history trend in prompt when summaries available', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      mockFetch.mockResolvedValueOnce(mockProxyResponse('Health summary'));
+
+      const analyzer = new AIAnalyzer({ licenseKey: 'key', tier: 'pro' });
+      const stats = createSuiteStats({ passRate: 85 });
+      const historySummaries = [
+        { runId: 'r1', timestamp: '2025-01-01', total: 10, passed: 9, failed: 1, skipped: 0, flaky: 0, slow: 0, duration: 1000, passRate: 90 },
+        { runId: 'r2', timestamp: '2025-01-02', total: 10, passed: 8, failed: 2, skipped: 0, flaky: 0, slow: 0, duration: 1000, passRate: 80 },
+      ];
+
+      await analyzer.analyzeSuiteHealth([], stats, [], historySummaries);
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.prompt).toContain('90%');
+      expect(body.prompt).toContain('80%');
+      expect(body.prompt).toContain('85% (current)');
+    });
+
+    it('returns undefined on proxy error', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const analyzer = new AIAnalyzer({ licenseKey: 'key', tier: 'pro' });
+      const stats = createSuiteStats();
+
+      const result = await analyzer.analyzeSuiteHealth([], stats, [], []);
+
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined when rate limited', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // First trigger rate limiting via analyzeFailed
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 429, json: async () => ({ resetAt: 1700000000 }) });
+      const analyzer = new AIAnalyzer({ licenseKey: 'key', tier: 'pro' });
+      await analyzer.analyzeFailed([createTestResult({ status: 'failed', error: 'Error' })]);
+
+      mockFetch.mockClear();
+      const result = await analyzer.analyzeSuiteHealth([], createSuiteStats(), [], []);
+
+      expect(result).toBeUndefined();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
   describe('generateRecommendations', () => {
     it('generates flakiness recommendations for flaky tests', () => {
       const analyzer = new AIAnalyzer();

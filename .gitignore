@@ -37,3 +37,8 @@ example/premium-report.html
 
 # License keys
 keys/
+
+# Benchmark outputs
+benchmark/results/
+benchmark/node_modules/
+benchmark/specs/

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-03-02
+
+### Added
+
+- **AI Suite Health Summary** (Starter+): AI-generated executive summary in the Overview tab combining failure clusters, flakiness trends, performance regressions, and historical pass rate into natural-language insights. Enabled by default; disable with `enableAISuiteHealth: false` to preserve AI quota (counts as 1 AI request per run).
+
 ## [1.4.0] - 2026-02-28
 
 ### Added

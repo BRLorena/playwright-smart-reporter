@@ -284,7 +284,8 @@ class SmartReporter implements Reporter {
     // Secondary source: annotations (for backwards compatibility)
     for (const a of test.annotations) {
       if (a.type === 'tag' || a.type.startsWith('@')) {
-        const tag = a.type.startsWith('@') ? a.type : `@${a.description || a.type}`;
+        const rawTag = a.type.startsWith('@') ? a.type : (a.description || a.type);
+        const tag = rawTag.startsWith('@') ? rawTag : `@${rawTag}`;
         if (!tags.includes(tag)) tags.push(tag);
       }
     }
@@ -504,6 +505,9 @@ class SmartReporter implements Reporter {
     this.results = Array.from(this.resultsMap.values());
 
     // Signal live reporting that the run is complete
+    // Note: JSONL file is intentionally NOT cleaned up here — the SSE handler
+    // may still need to push the 'complete' event to connected dashboards.
+    // The file is truncated automatically on the next run via LiveWriter.start().
     this.liveWriter.complete(Date.now() - this.startTime);
 
     // Get failure clusters

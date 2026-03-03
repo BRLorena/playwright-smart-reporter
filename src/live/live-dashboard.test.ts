@@ -118,4 +118,16 @@ describe('generateLiveReportPage', () => {
     expect(html).toContain('live-badge');
     expect(html).toContain('live-dot');
   });
+
+  it('reads totalExpected (not totalTests) from start event', () => {
+    const html = generateLiveReportPage({ jsonlFile: 'results.jsonl' });
+    expect(html).toContain('ev.totalExpected');
+    expect(html).not.toContain('ev.totalTests');
+  });
+
+  it('includes timeout for waitForFinalReport polling', () => {
+    const html = generateLiveReportPage({ jsonlFile: 'results.jsonl' });
+    expect(html).toContain('maxFinalReportAttempts');
+    expect(html).toContain('timed out');
+  });
 });

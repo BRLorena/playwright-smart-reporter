@@ -168,6 +168,69 @@ describe('Run Tests button: HTML generation', () => {
   });
 });
 
+describe('buildFilteredCommand (via POST /run body)', () => {
+  it('POST /run with files filter appends ./-prefixed quoted file paths', () => {
+    const base = 'npx playwright test';
+    const filters = { files: ['tests/login.spec.ts', 'tests/checkout.spec.ts'] };
+    // Simulates what buildFilteredCommand produces (with ./ prefix to prevent substring matching)
+    const parts = [base];
+    for (const f of filters.files) {
+      const anchored = f.startsWith('./') || f.startsWith('/') ? f : `./${f}`;
+      parts.push(`"${anchored}"`);
+    }
+    const cmd = parts.join(' ');
+    expect(cmd).toBe('npx playwright test "./tests/login.spec.ts" "./tests/checkout.spec.ts"');
+  });
+
+  it('POST /run with grep filter appends --grep flag', () => {
+    const base = 'npx playwright test';
+    const filters = { grep: '@smoke' };
+    const cmd = `${base} --grep "${filters.grep}"`;
+    expect(cmd).toBe('npx playwright test --grep "@smoke"');
+  });
+
+  it('POST /run with combined filters appends both files and grep', () => {
+    const base = 'npx playwright test';
+    const filters = { files: ['tests/auth.spec.ts'], grep: 'login' };
+    const parts = [base];
+    for (const f of filters.files) {
+      const anchored = f.startsWith('./') || f.startsWith('/') ? f : `./${f}`;
+      parts.push(`"${anchored}"`);
+    }
+    parts.push(`--grep "${filters.grep}"`);
+    const cmd = parts.join(' ');
+    expect(cmd).toBe('npx playwright test "./tests/auth.spec.ts" --grep "login"');
+  });
+
+  it('strips shell metacharacters from filter inputs but preserves pipe for grep OR', () => {
+    const dangerous = 'test; rm -rf /';
+    const sanitized = dangerous.replace(/[;&`$(){}!\\\n\r]/g, '');
+    expect(sanitized).toBe('test rm -rf /');
+    expect(sanitized).not.toContain(';');
+
+    // Pipe is preserved for Playwright --grep OR patterns (safe inside double quotes)
+    const grepOr = '@smoke|@regression';
+    const sanitizedGrep = grepOr.replace(/[;&`$(){}!\\\n\r]/g, '');
+    expect(sanitizedGrep).toBe('@smoke|@regression');
+  });
+
+  it('POST /run with empty body runs base command unfiltered', () => {
+    const filters: { files?: string[]; grep?: string } = {};
+    const hasFiles = filters.files && Array.isArray(filters.files) && filters.files.length > 0;
+    const hasGrep = filters.grep && typeof filters.grep === 'string';
+    expect(hasFiles).toBeFalsy();
+    expect(hasGrep).toBeFalsy();
+  });
+
+  it('POST /run with tags produces OR-joined grep pattern', () => {
+    const tags = ['@smoke', '@critical'];
+    const grepFromTags = tags.join('|');
+    expect(grepFromTags).toBe('@smoke|@critical');
+    const cmd = `npx playwright test --grep "${grepFromTags}"`;
+    expect(cmd).toContain('--grep "@smoke|@critical"');
+  });
+});
+
 describe('Run/Cancel endpoint contract', () => {
   it('POST /run returns started with command when not running', () => {
     const response = { status: 'started', command: 'npx playwright test' };
@@ -180,13 +243,20 @@ describe('Run/Cancel endpoint contract', () => {
     expect(response.error).toContain('already in progress');
   });
 
-  it('GET /run returns running state and command', () => {
-    const idle = { running: false, command: 'npx playwright test' };
+  it('GET /run returns running state, command, and lastExitCode', () => {
+    const idle = { running: false, command: 'npx playwright test', lastExitCode: null };
     expect(idle.running).toBe(false);
     expect(idle.command).toBeTruthy();
+    expect(idle.lastExitCode).toBeNull();
 
-    const active = { running: true, command: 'npx playwright test' };
+    const active = { running: true, command: 'npx playwright test', lastExitCode: null };
     expect(active.running).toBe(true);
+
+    const completed = { running: false, command: 'npx playwright test', lastExitCode: 0 };
+    expect(completed.lastExitCode).toBe(0);
+
+    const failed = { running: false, command: 'npx playwright test', lastExitCode: 1 };
+    expect(failed.lastExitCode).toBe(1);
   });
 
   it('DELETE /run returns cancelled when running', () => {

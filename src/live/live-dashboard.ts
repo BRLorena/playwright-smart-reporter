@@ -344,7 +344,14 @@ export function generateLiveReportPage(options: LiveReportPageOptions): string {
     feed.insertBefore(item, feed.firstChild);
   }
 
+  var finalReportAttempts = 0;
+  var maxFinalReportAttempts = 60;
   function waitForFinalReport() {
+    finalReportAttempts++;
+    if (finalReportAttempts > maxFinalReportAttempts) {
+      document.getElementById('footer').textContent = 'Report generation timed out. Refresh manually to check.';
+      return;
+    }
     document.getElementById('footer').textContent = 'Generating report...';
     fetch(window.location.href, { cache: 'no-store', method: 'HEAD' })
       .then(function() { return fetch(window.location.href, { cache: 'no-store' }); })
@@ -356,7 +363,7 @@ export function generateLiveReportPage(options: LiveReportPageOptions): string {
           setTimeout(waitForFinalReport, 1000);
         }
       })
-      .catch(function() { setTimeout(waitForFinalReport, 1000); });
+      .catch(function() { setTimeout(waitForFinalReport, 2000); });
   }
 
   function onComplete(ev) {
@@ -373,7 +380,7 @@ export function generateLiveReportPage(options: LiveReportPageOptions): string {
   function processEvent(ev) {
     if (ev.event === 'start') {
       startTime = Date.now();
-      totalExpected = ev.totalTests || 0;
+      totalExpected = ev.totalExpected || 0;
       document.getElementById('progress-label').textContent = '0 / ' + totalExpected + ' tests';
     } else if (ev.event === 'test') {
       if (ev.counters) updateUI(ev.counters);

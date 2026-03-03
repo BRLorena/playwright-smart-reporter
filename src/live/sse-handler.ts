@@ -116,7 +116,9 @@ export function buildSseHandler(jsonlPath: string): SseHandler {
 
   // Polling fallback: fs.watch is unreliable on macOS for file creation in large dirs.
   // Poll every 500ms to catch new data regardless of watcher state.
+  // Skip polling when no clients are connected to avoid unnecessary I/O.
   pollInterval = setInterval(() => {
+    if (clients.size === 0) return;
     if (!fs.existsSync(jsonlPath)) return;
     if (!watcher) {
       lastOffset = 0;

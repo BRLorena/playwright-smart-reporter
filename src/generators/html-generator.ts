@@ -1209,6 +1209,58 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
         <div class="live-run-row" id="live-run-row" style="display:none">
           <button class="live-run-btn" id="live-run-btn" onclick="runTests()">Run Tests</button>
           <button class="live-cancel-btn" id="live-cancel-btn" onclick="cancelTests()" style="display:none">Cancel</button>
+          <span class="live-filter-summary" id="live-filter-summary"></span>
+          <button class="live-filter-toggle" id="live-filter-toggle" onclick="toggleFilterPanel()" title="Filter tests">
+            ${icon('filter', 16)} <span id="live-filter-toggle-label">Filters</span>
+          </button>
+        </div>
+        <div class="live-filter-panel" id="live-filter-panel" style="display:none">
+          <div class="live-filter-section">
+            <div class="live-filter-section-header" onclick="toggleFilterSection('grep')">
+              <span>Grep (title match)</span>
+              <span class="live-filter-chevron" id="live-filter-chevron-grep">${icon('chevron-down', 14)}</span>
+            </div>
+            <div class="live-filter-section-body" id="live-filter-body-grep">
+              <input type="text" class="live-filter-grep-input" id="live-filter-grep" placeholder="e.g. login, checkout flow..." oninput="cascadeFilters()">
+            </div>
+          </div>
+          <div class="live-filter-section">
+            <div class="live-filter-section-header" onclick="toggleFilterSection('tags')">
+              <span>Tags</span>
+              <span class="live-filter-count" id="live-filter-tags-count"></span>
+              <span class="live-filter-chevron" id="live-filter-chevron-tags">${icon('chevron-down', 14)}</span>
+            </div>
+            <div class="live-filter-section-body" id="live-filter-body-tags">
+              <div class="live-filter-chips" id="live-filter-tags-chips"></div>
+            </div>
+          </div>
+          <div class="live-filter-section">
+            <div class="live-filter-section-header" onclick="toggleFilterSection('files')">
+              <span>Files</span>
+              <span class="live-filter-count" id="live-filter-files-count"></span>
+              <span class="live-filter-chevron" id="live-filter-chevron-files">${icon('chevron-down', 14)}</span>
+            </div>
+            <div class="live-filter-section-body" id="live-filter-body-files" style="display:none">
+              <div class="live-filter-file-actions">
+                <button class="live-filter-action-btn" onclick="selectAllFiles(true)">All</button>
+                <button class="live-filter-action-btn" onclick="selectAllFiles(false)">None</button>
+              </div>
+              <div class="live-filter-file-list" id="live-filter-files-list"></div>
+            </div>
+          </div>
+          <div class="live-filter-section">
+            <div class="live-filter-section-header" onclick="toggleFilterSection('suites')">
+              <span>Suites</span>
+              <span class="live-filter-count" id="live-filter-suites-count"></span>
+              <span class="live-filter-chevron" id="live-filter-chevron-suites">${icon('chevron-down', 14)}</span>
+            </div>
+            <div class="live-filter-section-body" id="live-filter-body-suites" style="display:none">
+              <div class="live-filter-file-list" id="live-filter-suites-list"></div>
+            </div>
+          </div>
+          <div class="live-filter-bar-actions">
+            <button class="live-filter-clear-btn" id="live-filter-clear" onclick="clearAllFilters()" style="display:none">Clear all filters</button>
+          </div>
         </div>
         <div class="live-content">
           <div class="live-elapsed-row">
@@ -1283,6 +1335,9 @@ ${data.options.live?.enabled ? `
     var liveStartTime = Date.now();
     var liveTotalExpected = 0;
     var liveTimerRunning = isLiveMode;
+    var liveEventSource = null;
+    var livePollTimer = null;
+    var liveIgnoreEvents = false;
 
     function tickLiveElapsed() {
       if (!liveTimerRunning) return;
@@ -1367,7 +1422,7 @@ ${data.options.live?.enabled ? `
     function processLiveEvent(ev) {
       if (ev.event === 'start') {
         liveStartTime = Date.now();
-        liveTotalExpected = ev.totalTests || 0;
+        liveTotalExpected = ev.totalExpected || 0;
         document.getElementById('live-progress-label').textContent = '0 / '+liveTotalExpected+' tests';
       } else if (ev.event === 'test') {
         if (ev.counters) updateLiveUI(ev.counters);
@@ -1384,17 +1439,32 @@ ${data.options.live?.enabled ? `
       }
     }
 
+    function disconnectSse() {
+      if (liveEventSource) {
+        liveEventSource.close();
+        liveEventSource = null;
+      }
+      if (livePollTimer) {
+        clearInterval(livePollTimer);
+        livePollTimer = null;
+      }
+    }
+
     function connectSse() {
+      disconnectSse();
+      liveIgnoreEvents = false;
       var sseUrl = '__SSE_URL__';
       var useSse = sseUrl !== '__' + 'SSE_URL__';
       if (useSse) {
-        var source = new EventSource(sseUrl);
-        source.onmessage = function(e) {
+        liveEventSource = new EventSource(sseUrl);
+        liveEventSource.onmessage = function(e) {
+          if (liveIgnoreEvents) return;
           try { processLiveEvent(JSON.parse(e.data)); } catch(_) {}
         };
       } else {
         var lastLineCount = 0;
         function pollLive() {
+          if (liveIgnoreEvents) return;
           fetch(liveJsonlFile, { cache: 'no-store' })
             .then(function(r) { return r.text(); })
             .then(function(text) {
@@ -1406,16 +1476,301 @@ ${data.options.live?.enabled ? `
             })
             .catch(function() {});
         }
-        setInterval(pollLive, 2000);
+        livePollTimer = setInterval(pollLive, 2000);
         pollLive();
       }
     }
 
+    // ---- Filter state ----
+    var selectedTags = {};
+    var selectedFiles = {};
+    var selectedSuites = {};
+
     // Run Tests button — shown when served with --run-command
     var runEnabled = '__RUN_ENABLED__';
-    if (runEnabled === 'true') {
+    var runIsEnabled = (runEnabled === 'true');
+    if (runIsEnabled) {
       var runRow = document.getElementById('live-run-row');
       if (runRow) runRow.style.display = 'flex';
+    }
+
+    function initFilterPanel() {
+      // Populate tags
+      var tagSet = {};
+      var fileSet = {};
+      var suiteSet = {};
+      for (var i = 0; i < tests.length; i++) {
+        var t = tests[i];
+        if (t.tags) for (var j = 0; j < t.tags.length; j++) tagSet[t.tags[j]] = true;
+        if (t.file) fileSet[t.file] = true;
+        if (t.suites) for (var k = 0; k < t.suites.length; k++) suiteSet[t.suites[k]] = true;
+        if (t.suite && !suiteSet[t.suite]) suiteSet[t.suite] = true;
+      }
+
+      // Tags chips
+      var tagsContainer = document.getElementById('live-filter-tags-chips');
+      if (tagsContainer) {
+        var tagKeys = Object.keys(tagSet).sort();
+        if (tagKeys.length === 0) {
+          tagsContainer.innerHTML = '<span style="font-size:0.75rem;color:var(--text-secondary)">No tags found</span>';
+        } else {
+          tagsContainer.innerHTML = tagKeys.map(function(tag) {
+            return '<button class="live-filter-chip" data-tag="'+escLive(tag)+'" onclick="toggleFilterChip(this,\\'tags\\')">'+escLive(tag)+'</button>';
+          }).join('');
+        }
+      }
+
+      // Files list
+      var filesContainer = document.getElementById('live-filter-files-list');
+      if (filesContainer) {
+        var fileKeys = Object.keys(fileSet).sort();
+        filesContainer.innerHTML = fileKeys.map(function(f, idx) {
+          var short = f.length > 60 ? '...' + f.slice(-57) : f;
+          return '<div class="live-filter-file-item"><input type="checkbox" id="ff-'+idx+'" checked data-file="'+escLive(f)+'" onchange="toggleFileFilter(this)"><label for="ff-'+idx+'" title="'+escLive(f)+'">'+escLive(short)+'</label></div>';
+        }).join('');
+        // Init all files as selected
+        for (var fi = 0; fi < fileKeys.length; fi++) selectedFiles[fileKeys[fi]] = true;
+      }
+
+      // Suites list
+      var suitesContainer = document.getElementById('live-filter-suites-list');
+      if (suitesContainer) {
+        var suiteKeys = Object.keys(suiteSet).sort();
+        if (suiteKeys.length === 0) {
+          suitesContainer.innerHTML = '<span style="font-size:0.75rem;color:var(--text-secondary)">No suites found</span>';
+        } else {
+          suitesContainer.innerHTML = suiteKeys.map(function(s, idx) {
+            return '<div class="live-filter-file-item"><input type="checkbox" id="fs-'+idx+'" checked data-suite="'+escLive(s)+'" onchange="toggleSuiteFilter(this)"><label for="fs-'+idx+'">'+escLive(s)+'</label></div>';
+          }).join('');
+          for (var si = 0; si < suiteKeys.length; si++) selectedSuites[suiteKeys[si]] = true;
+        }
+      }
+
+      updateFilterSummary();
+    }
+
+    window.toggleFilterPanel = function() {
+      var panel = document.getElementById('live-filter-panel');
+      var toggle = document.getElementById('live-filter-toggle');
+      if (!panel) return;
+      var show = panel.style.display === 'none';
+      panel.style.display = show ? 'block' : 'none';
+      if (toggle) toggle.classList.toggle('active', show);
+    };
+
+    window.toggleFilterSection = function(section) {
+      var body = document.getElementById('live-filter-body-' + section);
+      var chevron = document.getElementById('live-filter-chevron-' + section);
+      if (!body) return;
+      var show = body.style.display === 'none';
+      body.style.display = show ? '' : 'none';
+      if (chevron) chevron.classList.toggle('collapsed', !show);
+    };
+
+    window.toggleFilterChip = function(el, type) {
+      el.classList.toggle('selected');
+      var key = el.getAttribute('data-tag');
+      if (el.classList.contains('selected')) {
+        selectedTags[key] = true;
+      } else {
+        delete selectedTags[key];
+      }
+      cascadeFilters();
+    };
+
+    window.toggleFileFilter = function(el) {
+      var file = el.getAttribute('data-file');
+      if (el.checked) { selectedFiles[file] = true; } else { delete selectedFiles[file]; }
+      updateFilterSummary();
+    };
+
+    window.toggleSuiteFilter = function(el) {
+      var suite = el.getAttribute('data-suite');
+      if (el.checked) { selectedSuites[suite] = true; } else { delete selectedSuites[suite]; }
+      updateFilterSummary();
+    };
+
+    window.selectAllFiles = function(select) {
+      var checkboxes = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]');
+      for (var i = 0; i < checkboxes.length; i++) {
+        checkboxes[i].checked = select;
+        var f = checkboxes[i].getAttribute('data-file');
+        if (select) { selectedFiles[f] = true; } else { delete selectedFiles[f]; }
+      }
+      updateFilterSummary();
+    };
+
+    window.clearAllFilters = function() {
+      selectedTags = {};
+      document.querySelectorAll('.live-filter-chip.selected').forEach(function(c) { c.classList.remove('selected'); });
+      var grep = document.getElementById('live-filter-grep');
+      if (grep) grep.value = '';
+      selectAllFiles(true);
+      var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+      for (var i = 0; i < suiteBoxes.length; i++) {
+        suiteBoxes[i].checked = true;
+        var s = suiteBoxes[i].getAttribute('data-suite');
+        selectedSuites[s] = true;
+      }
+      updateFilterSummary();
+    };
+
+    // When tags or grep change, auto-select only files/suites containing matching tests
+    window.cascadeFilters = function() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var hasPrimary = grep || activeTags.length > 0;
+
+      if (!hasPrimary) {
+        // No primary filters — restore all files and suites
+        selectAllFiles(true);
+        var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+        for (var i = 0; i < suiteBoxes.length; i++) {
+          suiteBoxes[i].checked = true;
+          selectedSuites[suiteBoxes[i].getAttribute('data-suite')] = true;
+        }
+        updateFilterSummary();
+        return;
+      }
+
+      // Find files and suites that contain tests matching primary filters (tags + grep)
+      var matchingFiles = {};
+      var matchingSuites = {};
+      for (var i = 0; i < tests.length; i++) {
+        var t = tests[i];
+        var matchesPrimary = true;
+        // Check tag match
+        if (activeTags.length > 0) {
+          var tagHit = false;
+          if (t.tags) {
+            for (var j = 0; j < activeTags.length; j++) {
+              if (t.tags.indexOf(activeTags[j]) !== -1) { tagHit = true; break; }
+            }
+          }
+          if (!tagHit) matchesPrimary = false;
+        }
+        // Check grep match
+        if (matchesPrimary && grep && t.title && t.title.toLowerCase().indexOf(grep.toLowerCase()) === -1) {
+          matchesPrimary = false;
+        }
+        if (matchesPrimary) {
+          if (t.file) matchingFiles[t.file] = true;
+          if (t.suites) { for (var k = 0; k < t.suites.length; k++) matchingSuites[t.suites[k]] = true; }
+          if (t.suite) matchingSuites[t.suite] = true;
+        }
+      }
+
+      // Update file checkboxes
+      selectedFiles = {};
+      var fileBoxes = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]');
+      for (var fi = 0; fi < fileBoxes.length; fi++) {
+        var f = fileBoxes[fi].getAttribute('data-file');
+        var match = !!matchingFiles[f];
+        fileBoxes[fi].checked = match;
+        if (match) selectedFiles[f] = true;
+      }
+
+      // Update suite checkboxes
+      selectedSuites = {};
+      var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+      for (var si = 0; si < suiteBoxes.length; si++) {
+        var s = suiteBoxes[si].getAttribute('data-suite');
+        var match = !!matchingSuites[s];
+        suiteBoxes[si].checked = match;
+        if (match) selectedSuites[s] = true;
+      }
+
+      updateFilterSummary();
+    };
+
+    window.updateFilterSummary = function() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var totalFiles = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]').length;
+      var checkedFiles = Object.keys(selectedFiles).length;
+      var totalSuites = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]').length;
+      var checkedSuites = Object.keys(selectedSuites).length;
+      var hasFilter = grep || activeTags.length > 0 || checkedFiles < totalFiles || checkedSuites < totalSuites;
+
+      // Count matching tests
+      var matching = 0;
+      for (var i = 0; i < tests.length; i++) {
+        if (testMatchesFilters(tests[i], grep, activeTags)) matching++;
+      }
+
+      var summary = document.getElementById('live-filter-summary');
+      if (summary) {
+        if (hasFilter) {
+          summary.textContent = matching + ' of ' + tests.length + ' tests selected';
+          summary.classList.remove('all-selected');
+        } else {
+          summary.textContent = 'All ' + tests.length + ' tests selected';
+          summary.classList.add('all-selected');
+        }
+      }
+      var clearBtn = document.getElementById('live-filter-clear');
+      if (clearBtn) clearBtn.style.display = hasFilter ? '' : 'none';
+
+      // Update section counts
+      var tc = document.getElementById('live-filter-tags-count');
+      if (tc) tc.textContent = activeTags.length > 0 ? activeTags.length : '';
+      var fc = document.getElementById('live-filter-files-count');
+      if (fc) fc.textContent = checkedFiles < totalFiles ? checkedFiles + '/' + totalFiles : '';
+      var sc = document.getElementById('live-filter-suites-count');
+      if (sc) sc.textContent = checkedSuites < totalSuites ? checkedSuites + '/' + totalSuites : '';
+    };
+
+    function testMatchesFilters(t, grep, activeTags) {
+      // File filter
+      if (t.file && !selectedFiles[t.file]) return false;
+      // Suite filter (AND: ALL of a test's suites must be selected)
+      if (t.suites && t.suites.length > 0) {
+        for (var i = 0; i < t.suites.length; i++) {
+          if (!selectedSuites[t.suites[i]]) return false;
+        }
+      } else if (t.suite && !selectedSuites[t.suite]) {
+        return false;
+      }
+      // Tag filter (OR: test must have at least one selected tag)
+      if (activeTags.length > 0) {
+        var tagMatch = false;
+        if (t.tags) {
+          for (var j = 0; j < activeTags.length; j++) {
+            if (t.tags.indexOf(activeTags[j]) !== -1) { tagMatch = true; break; }
+          }
+        }
+        if (!tagMatch) return false;
+      }
+      // Grep filter
+      if (grep && t.title && t.title.toLowerCase().indexOf(grep.toLowerCase()) === -1) return false;
+      return true;
+    }
+
+    function buildFilterPayload() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var totalFiles = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]').length;
+      var checkedFiles = Object.keys(selectedFiles);
+      var totalSuites = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]').length;
+      var checkedSuites = Object.keys(selectedSuites);
+
+      var payload = {};
+      // Only include files if not all are selected
+      if (checkedFiles.length < totalFiles && checkedFiles.length > 0) {
+        payload.files = checkedFiles;
+      }
+      // Build grep from tags + grep input
+      var grepParts = [];
+      if (activeTags.length > 0) {
+        grepParts.push(activeTags.join('|'));
+      }
+      if (grep) {
+        grepParts.push(grep);
+      }
+      if (grepParts.length > 0) {
+        payload.grep = grepParts.join('.*');
+      }
+      return payload;
     }
 
     function setRunButtonState(running) {
@@ -1425,12 +1780,7 @@ ${data.options.live?.enabled ? `
       if (cancelBtn) cancelBtn.style.display = running ? 'inline-block' : 'none';
     }
 
-    window.runTests = function() {
-      var btn = document.getElementById('live-run-btn');
-      if (!btn || btn.disabled) return;
-      setRunButtonState(true);
-
-      // Reset Live UI
+    function resetLiveUI() {
       var ids = ['passed','failed','flaky','skipped'];
       for (var i = 0; i < ids.length; i++) {
         var cv = document.getElementById('live-counter-' + ids[i]);
@@ -1444,43 +1794,73 @@ ${data.options.live?.enabled ? `
       if (ff) ff.innerHTML = '';
       var elapsed = document.getElementById('live-elapsed');
       if (elapsed) elapsed.textContent = '0s';
+    }
+
+    window.runTests = function() {
+      var btn = document.getElementById('live-run-btn');
+      if (!btn || btn.disabled) return;
+      setRunButtonState(true);
+      btn.textContent = 'Starting\u2026';
+
+      resetLiveUI();
 
       liveCompleted = false;
-      liveTimerRunning = true;
-      liveStartTime = Date.now();
+      liveTimerRunning = false;
       liveTotalExpected = 0;
-      tickLiveElapsed();
 
       var b = document.getElementById('live-status-badge');
       if (b) b.classList.add('running');
       var st = document.getElementById('live-status-text');
-      if (st) st.textContent = 'Running';
+      if (st) st.textContent = 'Starting';
       var nd = document.getElementById('live-nav-indicator');
       if (nd) nd.classList.remove('stopped');
 
       switchView('live');
-      connectSse();
 
-      fetch('/run', { method: 'POST' })
+      var filterPayload = buildFilterPayload();
+      fetch('/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filterPayload)
+      })
         .then(function(r) {
           if (r.status === 409) {
             setRunButtonState(false);
+            btn.textContent = 'Run Tests';
             alert('A test run is already in progress');
-          } else if (!r.ok) {
-            setRunButtonState(false);
-            alert('Failed to start tests (HTTP ' + r.status + ')');
+            return;
           }
+          if (!r.ok) {
+            setRunButtonState(false);
+            btn.textContent = 'Run Tests';
+            alert('Failed to start tests (HTTP ' + r.status + ')');
+            return;
+          }
+          // Server accepted — now connect SSE to receive events
+          btn.textContent = 'Run Tests';
+          var stAfter = document.getElementById('live-status-text');
+          if (stAfter) stAfter.textContent = 'Running';
+          liveStartTime = Date.now();
+          liveTimerRunning = true;
+          tickLiveElapsed();
+          connectSse();
         })
         .catch(function() {
           setRunButtonState(false);
+          btn.textContent = 'Run Tests';
           alert('Failed to reach the server');
         });
     };
 
     window.cancelTests = function() {
+      var cancelBtn = document.getElementById('live-cancel-btn');
+      if (cancelBtn) cancelBtn.disabled = true;
       fetch('/run', { method: 'DELETE' })
         .then(function(r) {
+          if (cancelBtn) cancelBtn.disabled = false;
           if (r.ok) {
+            liveIgnoreEvents = true;
+            disconnectSse();
             liveTimerRunning = false;
             var st = document.getElementById('live-status-text');
             if (st) st.textContent = 'Cancelled';
@@ -1489,21 +1869,81 @@ ${data.options.live?.enabled ? `
             var nd = document.getElementById('live-nav-indicator');
             if (nd) nd.classList.add('stopped');
             setRunButtonState(false);
+          } else {
+            r.json().then(function(j) { if (j.error) alert(j.error); }).catch(function() {});
           }
         })
-        .catch(function() {});
+        .catch(function() {
+          if (cancelBtn) cancelBtn.disabled = false;
+          alert('Failed to reach the server');
+        });
     };
+
+    // Initialize filter panel after all functions are defined
+    if (runIsEnabled) initFilterPanel();
 
     // Auto-start: only when report is in live mode (during initial generation)
     if (!isLiveMode) return;
 
     switchView('live');
-    var badge = document.getElementById('live-status-badge');
-    if (badge) badge.classList.add('running');
-    var statusText = document.getElementById('live-status-text');
-    if (statusText) statusText.textContent = 'Running';
-    tickLiveElapsed();
-    connectSse();
+
+    // Check actual server state before assuming "Running"
+    if (runIsEnabled) {
+      fetch('/run')
+        .then(function(r) { return r.json(); })
+        .then(function(state) {
+          if (state.running) {
+            var badge = document.getElementById('live-status-badge');
+            if (badge) badge.classList.add('running');
+            var statusText = document.getElementById('live-status-text');
+            if (statusText) statusText.textContent = 'Running';
+            liveTimerRunning = true;
+            liveStartTime = Date.now();
+            tickLiveElapsed();
+            setRunButtonState(true);
+            connectSse();
+          } else {
+            // Tests not running — show idle state with last exit code
+            var badge = document.getElementById('live-status-badge');
+            if (badge) badge.classList.remove('running');
+            var statusText = document.getElementById('live-status-text');
+            if (state.lastExitCode === 0) {
+              if (statusText) statusText.textContent = 'Completed';
+            } else if (state.lastExitCode === -1) {
+              if (statusText) statusText.textContent = 'Cancelled';
+            } else if (state.lastExitCode !== null) {
+              if (statusText) statusText.textContent = 'Failed (exit ' + state.lastExitCode + ')';
+            } else {
+              if (statusText) statusText.textContent = 'Idle';
+            }
+            var nd = document.getElementById('live-nav-indicator');
+            if (nd) nd.classList.add('stopped');
+            setRunButtonState(false);
+            connectSse();
+          }
+        })
+        .catch(function() {
+          // Can't reach server — fall back to SSE/polling
+          var badge = document.getElementById('live-status-badge');
+          if (badge) badge.classList.add('running');
+          var statusText = document.getElementById('live-status-text');
+          if (statusText) statusText.textContent = 'Running';
+          liveTimerRunning = true;
+          liveStartTime = Date.now();
+          tickLiveElapsed();
+          connectSse();
+        });
+    } else {
+      // No run endpoint available — just connect SSE for live display
+      var badge = document.getElementById('live-status-badge');
+      if (badge) badge.classList.add('running');
+      var statusText = document.getElementById('live-status-text');
+      if (statusText) statusText.textContent = 'Running';
+      liveTimerRunning = true;
+      liveStartTime = Date.now();
+      tickLiveElapsed();
+      connectSse();
+    }
   })();
   </script>
 ` : ''}
@@ -2510,7 +2950,7 @@ ${highContrastOverride}${customOverrides}
     }
 
     .live-run-row {
-      padding: 0.75rem 1.5rem 0; display: flex; align-items: center;
+      padding: 0.75rem 1.5rem; display: flex; align-items: center;
     }
     .live-run-btn {
       padding: 0.5rem 1.25rem; border: none; border-radius: 6px;
@@ -2521,6 +2961,13 @@ ${highContrastOverride}${customOverrides}
     .live-run-btn:disabled {
       opacity: 0.5; cursor: not-allowed;
     }
+    .live-run-btn:disabled::before {
+      content: ''; display: inline-block; width: 12px; height: 12px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      margin-right: 6px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .live-cancel-btn {
       padding: 0.5rem 1.25rem; border: none; border-radius: 6px;
       background: var(--accent-red); color: #fff; font-weight: 600;
@@ -2528,6 +2975,100 @@ ${highContrastOverride}${customOverrides}
       margin-left: 0.5rem;
     }
     .live-cancel-btn:hover { opacity: 0.85; }
+
+    .live-filter-summary {
+      font-size: 0.8rem; color: var(--accent-yellow); margin-left: 0.5rem;
+      font-weight: 500; white-space: nowrap;
+    }
+    .live-filter-summary.all-selected {
+      color: var(--text-secondary);
+    }
+    .live-filter-toggle {
+      margin-left: auto; padding: 0.4rem 0.75rem; border: 1px solid var(--border-subtle);
+      border-radius: 6px; background: none; color: var(--text-secondary);
+      font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .live-filter-toggle:hover { border-color: var(--text-primary); color: var(--text-primary); }
+    .live-filter-toggle.active { border-color: var(--accent-green); color: var(--accent-green); }
+
+    .live-filter-panel {
+      border-top: 1px solid var(--border-subtle); padding: 1rem 1.5rem;
+      margin-top: 0.25rem;
+      background: var(--bg-card); max-height: 300px; overflow-y: auto;
+    }
+    .live-filter-section {
+      margin-bottom: 0.5rem;
+    }
+    .live-filter-section-header {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+      cursor: pointer; padding: 0.35rem 0; user-select: none;
+    }
+    .live-filter-section-header:hover { color: var(--text-primary); }
+    .live-filter-chevron { margin-left: auto; display: flex; transition: transform 0.2s; }
+    .live-filter-chevron.collapsed { transform: rotate(-90deg); }
+    .live-filter-count {
+      font-size: 0.7rem; background: var(--accent-green); color: #fff;
+      border-radius: 10px; padding: 0 6px; font-weight: 700; min-width: 18px;
+      text-align: center; line-height: 1.4;
+    }
+    .live-filter-count:empty { display: none; }
+    .live-filter-section-body { padding: 0.25rem 0 0.5rem; }
+
+    .live-filter-grep-input {
+      width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--border-subtle);
+      border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);
+      font-size: 0.8rem; font-family: inherit; outline: none;
+    }
+    .live-filter-grep-input:focus { border-color: var(--accent-green); }
+
+    .live-filter-chips {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .live-filter-chip {
+      padding: 0.25rem 0.6rem; border: 1px solid var(--border-subtle);
+      border-radius: 14px; font-size: 0.75rem; cursor: pointer;
+      color: var(--text-secondary); background: none;
+      transition: all 0.15s; user-select: none;
+    }
+    .live-filter-chip:hover { border-color: var(--text-primary); color: var(--text-primary); }
+    .live-filter-chip.selected {
+      background: var(--accent-green); border-color: var(--accent-green);
+      color: #fff; font-weight: 600;
+    }
+
+    .live-filter-file-actions {
+      display: flex; gap: 6px; margin-bottom: 6px;
+    }
+    .live-filter-action-btn {
+      padding: 0.2rem 0.5rem; border: 1px solid var(--border-subtle);
+      border-radius: 4px; font-size: 0.7rem; cursor: pointer;
+      background: none; color: var(--text-secondary);
+    }
+    .live-filter-action-btn:hover { color: var(--text-primary); border-color: var(--text-primary); }
+
+    .live-filter-file-list {
+      display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto;
+    }
+    .live-filter-file-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; color: var(--text-secondary); padding: 0.2rem 0;
+      cursor: pointer; user-select: none;
+    }
+    .live-filter-file-item:hover { color: var(--text-primary); }
+    .live-filter-file-item input[type="checkbox"] {
+      accent-color: var(--accent-green); margin: 0;
+    }
+    .live-filter-file-item label { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .live-filter-bar-actions { padding-top: 0.25rem; }
+    .live-filter-clear-btn {
+      padding: 0.3rem 0.75rem; border: none; border-radius: 6px;
+      background: rgba(239,68,68,0.15); color: var(--accent-red);
+      font-size: 0.75rem; font-weight: 600; cursor: pointer;
+    }
+    .live-filter-clear-btn:hover { background: rgba(239,68,68,0.25); }
 
     .live-content { padding: 1.5rem; }
     .live-elapsed-row {

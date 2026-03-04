@@ -79,7 +79,7 @@ export class LiveWriter {
     const counters = this.computeCounters();
 
     const errorSummary = input.error
-      ? input.error.split('\n')[0].slice(0, 200)
+      ? input.error.split('\n')[0].slice(0, 500)
       : undefined;
 
     const event: LiveTestEvent = {

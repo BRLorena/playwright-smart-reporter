@@ -112,6 +112,46 @@ describe('LiveWriter', () => {
       const event = JSON.parse(written.trim());
       expect(event.error).toBe('Expected 200, got 500');
     });
+
+    it('truncates error to 500 characters', () => {
+      writer.start(1);
+      mockFs.appendFileSync.mockImplementation(() => {});
+
+      const longError = 'A'.repeat(600);
+      writer.writeTestResult({
+        testId: 'file.ts::long-error',
+        title: 'long-error',
+        file: 'file.ts',
+        status: 'failed',
+        duration: 100,
+        retry: 0,
+        error: longError,
+      });
+
+      const written = mockFs.appendFileSync.mock.calls[0][1] as string;
+      const event = JSON.parse(written.trim());
+      expect(event.error).toHaveLength(500);
+    });
+
+    it('does not truncate error shorter than 500 characters', () => {
+      writer.start(1);
+      mockFs.appendFileSync.mockImplementation(() => {});
+
+      const shortError = 'B'.repeat(400);
+      writer.writeTestResult({
+        testId: 'file.ts::short-error',
+        title: 'short-error',
+        file: 'file.ts',
+        status: 'failed',
+        duration: 100,
+        retry: 0,
+        error: shortError,
+      });
+
+      const written = mockFs.appendFileSync.mock.calls[0][1] as string;
+      const event = JSON.parse(written.trim());
+      expect(event.error).toHaveLength(400);
+    });
   });
 
   describe('complete', () => {

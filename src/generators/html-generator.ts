@@ -173,15 +173,19 @@ function generateSparkline(values: number[], color: string, gradientId: string, 
     return [(points[i + 1][0] - points[i - 1][0]) / 2, (points[i + 1][1] - points[i - 1][1]) / 2];
   });
 
-  // Build cubic bezier path segments
+  // Build cubic bezier path segments (clamp control points to plot area)
+  const spkYMin = padTop;
+  const spkYMax = H - padBottom;
+  const clampSpkY = (y: number) => Math.max(spkYMin, Math.min(spkYMax, y));
+
   let linePath = `M${points[0][0].toFixed(1)},${points[0][1].toFixed(1)}`;
   for (let i = 0; i < n - 1; i++) {
     const p0 = points[i], p1 = points[i + 1];
     const t0 = tangents[i], t1 = tangents[i + 1];
     const cp1x = p0[0] + t0[0] / 3;
-    const cp1y = p0[1] + t0[1] / 3;
+    const cp1y = clampSpkY(p0[1] + t0[1] / 3);
     const cp2x = p1[0] - t1[0] / 3;
-    const cp2y = p1[1] - t1[1] / 3;
+    const cp2y = clampSpkY(p1[1] - t1[1] / 3);
     linePath += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
   }
 
@@ -537,17 +541,6 @@ function generateOverviewContent(
             </div>
           </div>
         ` : ''}
-        <div class="insight-card clickable" onclick="switchView('tests')" title="View all tests">
-          <div class="insight-icon">${icon('bar-chart-2', 24)}</div>
-          <div class="insight-content">
-            <div class="insight-label">Test Distribution</div>
-            <div class="insight-mini-stats">
-              <span class="mini-stat"><span class="dot passed"></span>${passed} passed</span>
-              <span class="mini-stat"><span class="dot failed"></span>${failed} failed</span>
-              <span class="mini-stat"><span class="dot skipped"></span>${skipped} skipped</span>
-            </div>
-          </div>
-        </div>
         <div class="insight-card clickable" onclick="switchView('trends')" title="View trends">
           <div class="insight-icon">${icon('trending-up', 24)}</div>
           <div class="insight-content">
@@ -688,6 +681,9 @@ export function generateHtml(data: HtmlGeneratorData): GeneratedReport {
   const cspSafe = options.cspSafe === true;
   const licenseTier = data.licenseTier ?? 'community';
   const hasPro = licenseTier !== 'community';
+  // Starter = any non-community tier (starter|pro|team). Identical to hasPro today;
+  // kept separate so Live gating can diverge from Pro gating if tiers evolve.
+  const hasStarter = licenseTier !== 'community';
   const quarantinedTestIds = data.quarantinedTestIds;
   const quarantineCount = quarantinedTestIds?.size ?? 0;
   const outputBasename = escapeHtml(data.outputBasename ?? 'smart-report');
@@ -978,6 +974,7 @@ ${hasPro ? `            <div style="height:1px;background:var(--border-subtle);m
           <button class="nav-item" data-view="live" onclick="switchView('live')" role="tab" aria-selected="false" aria-controls="view-live">
             <span class="nav-icon" aria-hidden="true">${icon('radio')}</span>
             <span class="nav-label">Live</span>
+            ${!hasStarter ? `<span class="premium-badge" style="font-size:8px;background:var(--accent-blue);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>` : ''}
             <span class="live-nav-dot" id="live-nav-indicator"></span>
           </button>
           ` : ''}
@@ -1198,7 +1195,7 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
       ` : ''}
       ${data.options.live?.enabled ? `
       <!-- Live View -->
-      <section class="view-panel" id="view-live" role="tabpanel" aria-label="Live" style="display: none;">
+      <section class="view-panel${hasStarter ? '' : ' live-section-gated'}" id="view-live" role="tabpanel" aria-label="Live" style="display: none;">
         <div class="view-header">
           <h2 class="view-title">Live Execution</h2>
           <span class="live-header-badge" id="live-status-badge">
@@ -1206,60 +1203,62 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
             <span id="live-status-text">Completed</span>
           </span>
         </div>
-        <div class="live-run-row" id="live-run-row" style="display:none">
-          <button class="live-run-btn" id="live-run-btn" onclick="runTests()">Run Tests</button>
-          <button class="live-cancel-btn" id="live-cancel-btn" onclick="cancelTests()" style="display:none">Cancel</button>
-          <span class="live-filter-summary" id="live-filter-summary"></span>
-          <button class="live-filter-toggle" id="live-filter-toggle" onclick="toggleFilterPanel()" title="Filter tests">
-            ${icon('filter', 16)} <span id="live-filter-toggle-label">Filters</span>
-          </button>
-        </div>
-        <div class="live-filter-panel" id="live-filter-panel" style="display:none">
-          <div class="live-filter-section">
-            <div class="live-filter-section-header" onclick="toggleFilterSection('grep')">
-              <span>Grep (title match)</span>
-              <span class="live-filter-chevron" id="live-filter-chevron-grep">${icon('chevron-down', 14)}</span>
-            </div>
-            <div class="live-filter-section-body" id="live-filter-body-grep">
-              <input type="text" class="live-filter-grep-input" id="live-filter-grep" placeholder="e.g. login, checkout flow..." oninput="cascadeFilters()">
-            </div>
+        <div class="live-controls-wrapper" id="live-controls-wrapper">
+          <div class="live-run-row live-run-row-hidden" id="live-run-row">
+            <button class="live-run-btn" id="live-run-btn" onclick="runTests()">Run Tests</button>
+            <button class="live-cancel-btn" id="live-cancel-btn" onclick="cancelTests()" style="display:none">Cancel</button>
+            <span class="live-filter-summary" id="live-filter-summary"></span>
+            <button class="live-filter-toggle" id="live-filter-toggle" onclick="toggleFilterPanel()" title="Filter tests">
+              ${icon('filter', 16)} <span id="live-filter-toggle-label">Filters</span>
+            </button>
           </div>
-          <div class="live-filter-section">
-            <div class="live-filter-section-header" onclick="toggleFilterSection('tags')">
-              <span>Tags</span>
-              <span class="live-filter-count" id="live-filter-tags-count"></span>
-              <span class="live-filter-chevron" id="live-filter-chevron-tags">${icon('chevron-down', 14)}</span>
-            </div>
-            <div class="live-filter-section-body" id="live-filter-body-tags">
-              <div class="live-filter-chips" id="live-filter-tags-chips"></div>
-            </div>
-          </div>
-          <div class="live-filter-section">
-            <div class="live-filter-section-header" onclick="toggleFilterSection('files')">
-              <span>Files</span>
-              <span class="live-filter-count" id="live-filter-files-count"></span>
-              <span class="live-filter-chevron" id="live-filter-chevron-files">${icon('chevron-down', 14)}</span>
-            </div>
-            <div class="live-filter-section-body" id="live-filter-body-files" style="display:none">
-              <div class="live-filter-file-actions">
-                <button class="live-filter-action-btn" onclick="selectAllFiles(true)">All</button>
-                <button class="live-filter-action-btn" onclick="selectAllFiles(false)">None</button>
+          <div class="live-filter-panel" id="live-filter-panel" style="display:none">
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('grep')">
+                <span>Grep (title match)</span>
+                <span class="live-filter-chevron" id="live-filter-chevron-grep">${icon('chevron-down', 14)}</span>
               </div>
-              <div class="live-filter-file-list" id="live-filter-files-list"></div>
+              <div class="live-filter-section-body" id="live-filter-body-grep">
+                <input type="text" class="live-filter-grep-input" id="live-filter-grep" placeholder="e.g. login, checkout flow..." oninput="cascadeFilters()">
+              </div>
             </div>
-          </div>
-          <div class="live-filter-section">
-            <div class="live-filter-section-header" onclick="toggleFilterSection('suites')">
-              <span>Suites</span>
-              <span class="live-filter-count" id="live-filter-suites-count"></span>
-              <span class="live-filter-chevron" id="live-filter-chevron-suites">${icon('chevron-down', 14)}</span>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('tags')">
+                <span>Tags</span>
+                <span class="live-filter-count" id="live-filter-tags-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-tags">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-tags">
+                <div class="live-filter-chips" id="live-filter-tags-chips"></div>
+              </div>
             </div>
-            <div class="live-filter-section-body" id="live-filter-body-suites" style="display:none">
-              <div class="live-filter-file-list" id="live-filter-suites-list"></div>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('files')">
+                <span>Files</span>
+                <span class="live-filter-count" id="live-filter-files-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-files">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-files" style="display:none">
+                <div class="live-filter-file-actions">
+                  <button class="live-filter-action-btn" onclick="selectAllFiles(true)">All</button>
+                  <button class="live-filter-action-btn" onclick="selectAllFiles(false)">None</button>
+                </div>
+                <div class="live-filter-file-list" id="live-filter-files-list"></div>
+              </div>
             </div>
-          </div>
-          <div class="live-filter-bar-actions">
-            <button class="live-filter-clear-btn" id="live-filter-clear" onclick="clearAllFilters()" style="display:none">Clear all filters</button>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('suites')">
+                <span>Suites</span>
+                <span class="live-filter-count" id="live-filter-suites-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-suites">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-suites" style="display:none">
+                <div class="live-filter-file-list" id="live-filter-suites-list"></div>
+              </div>
+            </div>
+            <div class="live-filter-bar-actions">
+              <button class="live-filter-clear-btn" id="live-filter-clear" onclick="clearAllFilters()" style="display:none">Clear all filters</button>
+            </div>
           </div>
         </div>
         <div class="live-content">
@@ -1282,7 +1281,20 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
           </div>
           <div class="live-failure-section">
             <h3>Failures</h3>
-            <div id="live-failure-feed">${results.filter(r => r.status === 'failed' || r.status === 'timedOut').map(r => `<div class="live-failure-item"><div class="live-failure-title">${escapeHtml(r.title)}</div><div class="live-failure-file">${escapeHtml(r.file)}</div>${r.error ? `<div class="live-failure-error">${escapeHtml(r.error.split('\\n')[0].substring(0, 300))}</div>` : ''}</div>`).join('')}</div>
+            <div id="live-failure-feed">${results.filter(r => r.status === 'failed' || r.status === 'timedOut').map(r => {
+              const failCardId = sanitizeId(r.testId);
+              return `<div class="live-failure-item live-failure-clickable" data-testid="${escapeHtml(r.testId)}" onclick="selectTest('${failCardId}'); switchView('tests');">
+                <div class="live-failure-item-main">
+                  ${r.screenshot && !r.screenshot.startsWith('data:') ? `<img class="live-failure-thumb" src="${r.screenshot}" alt="Failure screenshot">` : ''}
+                  <div class="live-failure-item-text">
+                    <div class="live-failure-title">${escapeHtml(r.title)}</div>
+                    <div class="live-failure-file">${escapeHtml(r.file)}${r.retry > 0 ? ` (retry ${r.retry})` : ''}</div>
+                    ${r.error ? `<div class="live-failure-error">${escapeHtml(r.error.split('\\n')[0])}</div>` : ''}
+                  </div>
+                </div>
+                <span class="live-failure-view-link">View Details &rarr;</span>
+              </div>`;
+            }).join('')}</div>
           </div>
         </div>
       </section>
@@ -1373,15 +1385,20 @@ ${data.options.live?.enabled ? `
       var id = ev.testId || ev.title || '';
       var safeId = 'live-fail-' + id.replace(/[^a-zA-Z0-9]/g, '_');
       var existing = document.getElementById(safeId);
-      var html = '<div class="live-failure-title">'+escLive(ev.title||'')+'</div>'
+      var html = '<div class="live-failure-item-main"><div class="live-failure-item-text">'
+        +'<div class="live-failure-title">'+escLive(ev.title||'')+'</div>'
         +'<div class="live-failure-file">'+escLive(ev.file||'')+(ev.retry > 0 ? ' (retry '+ev.retry+')' : '')+'</div>'
-        +(ev.error ? '<div class="live-failure-error">'+escLive(ev.error.substring(0,500))+'</div>' : '');
+        +(ev.error ? '<div class="live-failure-error">'+escLive(ev.error.substring(0,500))+'</div>' : '')
+        +'</div></div>'
+        +'<span class="live-failure-pending-label">View details after run completes</span>';
       if (existing) {
+        // data-testid persists on the element — only innerHTML is replaced on retry updates
         existing.innerHTML = html;
       } else {
         var item = document.createElement('div');
         item.className = 'live-failure-item';
         item.id = safeId;
+        item.dataset.testid = id;
         item.innerHTML = html;
         feed.insertBefore(item, feed.firstChild);
       }
@@ -1489,9 +1506,12 @@ ${data.options.live?.enabled ? `
     // Run Tests button — shown when served with --run-command
     var runEnabled = '__RUN_ENABLED__';
     var runIsEnabled = (runEnabled === 'true');
-    if (runIsEnabled) {
+    var liveGated = document.querySelector('.live-section-gated') !== null;
+    // Gating is cosmetic (CSS + JS) — actual run capability requires server-side
+    // license validation on the /run endpoint.
+    if (runIsEnabled && !liveGated) {
       var runRow = document.getElementById('live-run-row');
-      if (runRow) runRow.style.display = 'flex';
+      if (runRow) runRow.classList.remove('live-run-row-hidden');
     }
 
     function initFilterPanel() {
@@ -1774,6 +1794,7 @@ ${data.options.live?.enabled ? `
     }
 
     function setRunButtonState(running) {
+      if (liveGated) return;
       var btn = document.getElementById('live-run-btn');
       var cancelBtn = document.getElementById('live-cancel-btn');
       if (btn) btn.disabled = running;
@@ -2326,6 +2347,7 @@ ${highContrastOverride}${customOverrides}
       justify-content: space-between;
       padding: 0 1rem;
       background: var(--bg-secondary);
+      position: relative;
       border-bottom: 1px solid var(--border-subtle);
       z-index: 100;
     }
@@ -3123,6 +3145,28 @@ ${highContrastOverride}${customOverrides}
       font-family: ${monoFont}; white-space: pre-wrap;
       max-height: 80px; overflow: hidden;
     }
+    .live-failure-clickable { cursor: pointer; transition: background 0.15s; }
+    .live-failure-clickable:hover { background: var(--bg-hover, rgba(128,128,128,0.1)); }
+    .live-failure-item-main { display: flex; gap: 0.75rem; align-items: flex-start; }
+    .live-failure-item-text { flex: 1; min-width: 0; }
+    .live-failure-thumb {
+      width: 64px; height: 48px; object-fit: cover; border-radius: 4px;
+      border: 1px solid var(--border-subtle); flex-shrink: 0;
+    }
+    .live-failure-view-link {
+      display: block; margin-top: 6px; font-size: 0.75rem;
+      color: var(--accent-blue); font-weight: 500;
+    }
+    .live-failure-pending-label {
+      display: block; margin-top: 6px; font-size: 0.7rem;
+      color: var(--text-muted); font-style: italic;
+    }
+    .live-run-row-hidden { display: none; }
+    .live-section-gated {
+      opacity: 0.4 !important; pointer-events: none; filter: grayscale(0.6);
+      user-select: none; animation: none !important;
+    }
+    .live-section-gated .live-run-row { display: flex; }
 
     /* ============================================
        OVERVIEW VIEW
@@ -3216,12 +3260,6 @@ ${highContrastOverride}${customOverrides}
       border: 1px solid var(--border-subtle);
       border-radius: 16px;
       padding: 1.25rem;
-      transition: all 0.2s;
-    }
-
-    .hero-stat-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
     }
 
     .hero-stat-card.health {
@@ -3602,12 +3640,6 @@ ${highContrastOverride}${customOverrides}
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
       cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .insight-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
     }
 
     .insight-icon {
@@ -7214,6 +7246,164 @@ ${highContrastOverride}${customOverrides}
     }
 
     /* ============================================
+       DESIGN ENHANCEMENTS
+    ============================================ */
+
+    /* 1. Animated counter shimmer on hero stat values */
+    .hero-stat-value[data-target] {
+      display: inline-block;
+    }
+
+    /* 2. Staggered test list entrance (initial load only via .animate-entrance) */
+    @keyframes listItemIn {
+      from { opacity: 0; transform: translateX(-12px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .test-list-item.animate-entrance {
+      animation: listItemIn 0.3s ease both;
+    }
+    .test-list-item.animate-entrance:nth-child(1) { animation-delay: 0s; }
+    .test-list-item.animate-entrance:nth-child(2) { animation-delay: 0.03s; }
+    .test-list-item.animate-entrance:nth-child(3) { animation-delay: 0.06s; }
+    .test-list-item.animate-entrance:nth-child(4) { animation-delay: 0.09s; }
+    .test-list-item.animate-entrance:nth-child(5) { animation-delay: 0.12s; }
+    .test-list-item.animate-entrance:nth-child(6) { animation-delay: 0.15s; }
+    .test-list-item.animate-entrance:nth-child(7) { animation-delay: 0.18s; }
+    .test-list-item.animate-entrance:nth-child(8) { animation-delay: 0.21s; }
+    .test-list-item.animate-entrance:nth-child(9) { animation-delay: 0.24s; }
+    .test-list-item.animate-entrance:nth-child(10) { animation-delay: 0.27s; }
+    .test-list-item.animate-entrance:nth-child(n+11) { animation-delay: 0.3s; }
+
+    /* 3. Glassmorphism hero cards */
+    .hero-stat-card {
+      background: linear-gradient(135deg, rgba(26, 26, 36, 0.7), rgba(26, 26, 36, 0.4));
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]):not([data-theme="dracula"]):not([data-theme="cyberpunk"]) .hero-stat-card {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+      }
+    }
+    :root[data-theme="light"] .hero-stat-card {
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+
+    /* 4. Gradient accent bar on topbar */
+    .top-bar::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent-green), var(--accent-blue), var(--accent-purple));
+      opacity: 0.6;
+    }
+
+    /* 5. Enhanced hover interactions */
+    .hero-stat-card:hover {
+      transform: translateY(-4px) scale(1.01);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+    .hero-stat-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+
+    .insight-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .insight-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    /* 6. Progress ring animation on scroll */
+    @keyframes ringFill {
+      from { stroke-dasharray: 0 264; }
+    }
+    .progress-ring-fill.animate {
+      animation: ringFill 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+    .health-ring-fill.animate {
+      animation: ringFill 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    /* 7. Smooth view transitions (crossfade) */
+    .view-panel {
+      animation: viewFadeIn 0.25s ease;
+    }
+    @keyframes viewFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 8. Status-aware header accent */
+    .top-bar.status-all-pass::after {
+      background: linear-gradient(90deg, var(--accent-green), var(--accent-green), transparent);
+      opacity: 0.8;
+    }
+    .top-bar.status-has-failures::after {
+      background: linear-gradient(90deg, var(--accent-red), var(--accent-orange), transparent);
+      opacity: 0.8;
+    }
+    .top-bar.status-has-flaky::after {
+      background: linear-gradient(90deg, var(--accent-yellow), var(--accent-green), transparent);
+      opacity: 0.6;
+    }
+
+    /* 9. Micro-interactions */
+    @keyframes badgeBounce {
+      0% { transform: scale(0); opacity: 0; }
+      60% { transform: scale(1.15); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .test-item-badge {
+      animation: badgeBounce 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+
+    @keyframes countUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .hero-stat-value {
+      animation: countUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+      animation-delay: 0.2s;
+    }
+
+    .mini-bar {
+      animation: barGrow 0.8s cubic-bezier(0.4, 0, 0.2, 1) both;
+      animation-delay: 0.3s;
+    }
+    @keyframes barGrow {
+      from { width: 0; }
+    }
+
+    /* Hero stats stagger */
+    .hero-stat-card:nth-child(1) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0s; }
+    .hero-stat-card:nth-child(2) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.1s; }
+    .hero-stat-card:nth-child(3) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.2s; }
+    .hero-stat-card:nth-child(4) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.3s; }
+    @keyframes heroCardIn {
+      from { opacity: 0; transform: translateY(16px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* Reduce motion for accessibility */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-delay: 0s !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* ============================================
        PRINT STYLESHEET
     ============================================ */
     @media print {
@@ -7827,10 +8017,13 @@ function generateScripts(
         panel.style.display = 'none';
       });
 
-      // Show selected view
+      // Show selected view with fade-in
       const viewPanel = document.getElementById('view-' + view);
       if (viewPanel) {
         viewPanel.style.display = 'block';
+        viewPanel.style.animation = 'none';
+        viewPanel.offsetHeight; // force reflow
+        viewPanel.style.animation = '';
       }
 
       // Update breadcrumb
@@ -9063,7 +9256,7 @@ function generateScripts(
 	    }
 
     // Run on page load
-    window.addEventListener('DOMContentLoaded', () => {
+    function onReady() {
       scrollChartsToRight();
       initHistoryDrilldown();
       if (!traceViewerEnabled) {
@@ -9071,7 +9264,76 @@ function generateScripts(
           el.style.display = 'none';
         });
       }
-    });
+      initDesignEnhancements();
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', onReady);
+    } else {
+      onReady();
+    }
+
+    /* ============================================
+       DESIGN ENHANCEMENTS (JS)
+    ============================================ */
+    function initDesignEnhancements() {
+      animateCounters();
+      animateProgressRings();
+      setStatusAccent();
+      // Apply staggered entrance once — class is never re-added so tab switches don't replay
+      document.querySelectorAll('.test-list-item').forEach(function(el) {
+        el.classList.add('animate-entrance');
+      });
+    }
+
+    // 1. Animated counters — hero stat values count up
+    function animateCounters() {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      document.querySelectorAll('.hero-stat-value').forEach(function(el) {
+        var text = el.textContent || '';
+        // Match numbers like "95.2%" or "1.3s" or "28"
+        var match = text.match(/^([\\d.]+)(.*)/);
+        if (!match) return;
+        var target = parseFloat(match[1]);
+        var suffix = match[2];
+        if (isNaN(target) || target === 0) return;
+        var isFloat = match[1].includes('.');
+        var decimals = isFloat ? (match[1].split('.')[1] || '').length : 0;
+        var startTime = null;
+        var duration = 800;
+        el.textContent = '0' + suffix;
+        requestAnimationFrame(function step(ts) {
+          if (!startTime) startTime = ts;
+          var progress = Math.min((ts - startTime) / duration, 1);
+          // Ease out cubic
+          var eased = 1 - Math.pow(1 - progress, 3);
+          var current = eased * target;
+          el.textContent = (isFloat ? current.toFixed(decimals) : Math.round(current)) + suffix;
+          if (progress < 1) requestAnimationFrame(step);
+        });
+      });
+    }
+
+    // 6. Progress ring animation on load
+    function animateProgressRings() {
+      document.querySelectorAll('.progress-ring-fill, .health-ring-fill').forEach(function(el) {
+        el.classList.add('animate');
+      });
+    }
+
+    // 8. Status-aware header accent
+    function setStatusAccent() {
+      var topBar = document.querySelector('.top-bar');
+      if (!topBar) return;
+      var failedCount = document.querySelectorAll('#view-tests .status-dot.failed').length;
+      var flakyCount = document.querySelectorAll('#view-tests .test-item-badge.flaky').length;
+      if (failedCount > 0) {
+        topBar.classList.add('status-has-failures');
+      } else if (flakyCount > 0) {
+        topBar.classList.add('status-has-flaky');
+      } else {
+        topBar.classList.add('status-all-pass');
+      }
+    }
 
 ${includeGallery ? `    // Gallery functions\n${generateGalleryScript()}` : ''}
 

@@ -134,14 +134,18 @@ export function generateTrendChart(data: ChartData): string {
         return [(curvePoints[i + 1][0] - curvePoints[i - 1][0]) / 2, (curvePoints[i + 1][1] - curvePoints[i - 1][1]) / 2];
       });
 
+      const yMin = padding.top;
+      const yMax = padding.top + plotHeight;
+      const clampY = (y: number) => Math.max(yMin, Math.min(yMax, y));
+
       let linePath = `M${curvePoints[0][0].toFixed(1)},${curvePoints[0][1].toFixed(1)}`;
       for (let i = 0; i < n - 1; i++) {
         const p0 = curvePoints[i], p1 = curvePoints[i + 1];
         const t0 = tangents[i], t1 = tangents[i + 1];
         const cp1x = p0[0] + t0[0] / 3;
-        const cp1y = p0[1] + t0[1] / 3;
+        const cp1y = clampY(p0[1] + t0[1] / 3);
         const cp2x = p1[0] - t1[0] / 3;
-        const cp2y = p1[1] - t1[1] / 3;
+        const cp2y = clampY(p1[1] - t1[1] / 3);
         linePath += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
       }
 
@@ -219,11 +223,15 @@ export function generateTrendChart(data: ChartData): string {
         return [(avgPointPairs[i + 1][0] - avgPointPairs[i - 1][0]) / 2, (avgPointPairs[i + 1][1] - avgPointPairs[i - 1][1]) / 2];
       });
 
+      const avgYMin = padding.top;
+      const avgYMax = padding.top + plotHeight;
+      const clampAvgY = (y: number) => Math.max(avgYMin, Math.min(avgYMax, y));
+
       let avgPath = `M${avgPointPairs[0][0].toFixed(1)},${avgPointPairs[0][1].toFixed(1)}`;
       for (let i = 0; i < an - 1; i++) {
         const p0 = avgPointPairs[i], p1 = avgPointPairs[i + 1];
         const t0 = at[i], t1 = at[i + 1];
-        avgPath += ` C${(p0[0] + t0[0] / 3).toFixed(1)},${(p0[1] + t0[1] / 3).toFixed(1)} ${(p1[0] - t1[0] / 3).toFixed(1)},${(p1[1] - t1[1] / 3).toFixed(1)} ${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
+        avgPath += ` C${(p0[0] + t0[0] / 3).toFixed(1)},${clampAvgY(p0[1] + t0[1] / 3).toFixed(1)} ${(p1[0] - t1[0] / 3).toFixed(1)},${clampAvgY(p1[1] - t1[1] / 3).toFixed(1)} ${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
       }
 
       avgLine = `<path d="${avgPath}" class="trend-moving-avg" stroke="${avgColor}" fill="none" /><text class="trend-avg-label" x="${padding.left + plotWidth - 5}" y="${padding.top + 10}" text-anchor="end">3-run avg</text>`;

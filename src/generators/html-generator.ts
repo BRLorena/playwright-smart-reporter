@@ -880,7 +880,7 @@ export function generateHtml(data: HtmlGeneratorData): GeneratedReport {
   <meta property="og:title" content="${escapeHtml(reportTitle)} — Smart Test Report">
   <meta property="og:description" content="Interactive Playwright test report with stability grades, flakiness detection, trend analytics, and AI-powered failure analysis.">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="https://stagewright.dev/og-image.png">
+  <meta property="og:image" content="https://stagewright.dev/og-image.png?v=2">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">${cspSafe ? '' : fontLinks}
 ${headStyles}

@@ -537,12 +537,27 @@ describe('flaky filter', () => {
       expect(html).not.toContain('view-panel live-section-gated');
     });
 
-    it('does not render live section when live is not enabled', () => {
+    it('renders live section with gated class when live is not configured', () => {
       const data: HtmlGeneratorData = {
         results: [],
         history: createTestHistory(),
         startTime: Date.now(),
         options: {},
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('view-live');
+      expect(html).toContain('live-section-gated');
+    });
+
+    it('does not render live section when live is explicitly disabled', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: false } },
         licenseTier: 'community',
       };
 

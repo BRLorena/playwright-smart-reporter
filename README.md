@@ -35,27 +35,27 @@ Run your tests and open the generated `smart-report.html`.
 
 The free tier includes everything you need for local test reporting. Paid plans add AI failure analysis, premium themes, PDF exports, quality gates, and more — activated with a license key.
 
-| Feature | Free | Starter (£5/mo) | Pro (£9/mo) |
+| Feature | Local (Free) | Starter (£5/mo) | Pro (£9/mo) |
 |---|:---:|:---:|:---:|
-| Stability grades (A to F) | ✅ | ✅ | ✅ |
-| Flakiness detection & history tracking | ✅ | ✅ | ✅ |
-| Run comparison & trend analytics | ✅ | ✅ | ✅ |
-| Artifact gallery & trace viewer | ✅ | ✅ | ✅ |
-| Network logs & step timeline | ✅ | ✅ | ✅ |
+| Stability grades (A–F) so you know which tests to trust | ✅ | ✅ | ✅ |
+| Flakiness detection across retries and history | ✅ | ✅ | ✅ |
+| Run-to-run comparison — catch regressions before they ship | ✅ | ✅ | ✅ |
+| Screenshot, video, and trace gallery for every failure | ✅ | ✅ | ✅ |
+| Network request logs to pinpoint API issues | ✅ | ✅ | ✅ |
 | CI auto-detection & notifications | ✅ | ✅ | ✅ |
-| Live execution progress (read-only) | ✅ | ✅ | ✅ |
-| 4 built-in themes (System, Light, Dark, High Contrast) | ✅ | ✅ | ✅ |
-| Live run/cancel/filter controls | | ✅ | ✅ |
-| AI failure analysis (managed) | | 2,000/mo | 5,000/mo |
-| 6 additional themes | | ✅ | ✅ |
-| Executive PDF export (3 variants) | | ✅ | ✅ |
-| JSON + JUnit export | | ✅ | ✅ |
-| Quality gates (fail builds on thresholds) | | ✅ | ✅ |
-| Flaky test quarantine | | ✅ | ✅ |
-| Custom report branding (title, footer, colours) | | ✅ | ✅ |
-| Custom theme colours | | | ✅ |
-| AI suite health summary | | ✅ | ✅ |
-| Priority support | | | ✅ |
+| Live progress dashboard — watch results as tests execute | ✅ | ✅ | ✅ |
+| 4 built-in themes to match your workflow | ✅ | ✅ | ✅ |
+| Run, cancel, and filter tests from the live dashboard | | ✅ | ✅ |
+| AI-powered root cause analysis | | 2,000/mo | 5,000/mo |
+| 6 premium themes (Ocean, Sunset, Dracula, and more) | | ✅ | ✅ |
+| Share polished PDF reports with stakeholders | | ✅ | ✅ |
+| Export to JSON and JUnit XML for CI/CD pipelines | | ✅ | ✅ |
+| Quality gates — block merges when quality drops | | ✅ | ✅ |
+| Auto-quarantine unreliable tests to keep CI green | | ✅ | ✅ |
+| Brand reports with your logo and team name | | ✅ | ✅ |
+| Fully custom theme colours to match your brand | | | ✅ |
+| AI health summary — executive overview of suite quality | | ✅ | ✅ |
+| Priority email support — direct access to the team | | | ✅ |
 
 **Get a license at [stagewright.dev](https://stagewright.dev)**
 

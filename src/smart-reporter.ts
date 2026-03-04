@@ -546,7 +546,7 @@ class SmartReporter implements Reporter {
     } else if (!hasProForAI && options.enableAIRecommendations !== false) {
       const failedCount = this.results.filter(r => r.status === 'failed' || r.status === 'timedOut').length;
       if (failedCount > 0) {
-        console.log('\n   AI analysis requires a Starter or Pro license — see stagewright.dev/pricing');
+        console.log('\n   AI analysis requires a Starter or Pro license — see stagewright.dev/#pricing');
       }
     }
 
@@ -754,7 +754,7 @@ class SmartReporter implements Reporter {
         console.warn('⚠️  JSON export failed:', err);
       }
     } else if (this.options.exportJson && !hasPro) {
-      console.log('   JSON export requires a Starter or Pro license — see stagewright.dev/pricing');
+      console.log('   JSON export requires a Starter or Pro license — see stagewright.dev/#pricing');
     }
 
     if (this.options.exportJunit && hasPro) {
@@ -765,7 +765,7 @@ class SmartReporter implements Reporter {
         console.warn('⚠️  JUnit export failed:', err);
       }
     } else if (this.options.exportJunit && !hasPro) {
-      console.log('   JUnit export requires a Starter or Pro license — see stagewright.dev/pricing');
+      console.log('   JUnit export requires a Starter or Pro license — see stagewright.dev/#pricing');
     }
 
     if (this.options.exportPdf && hasPro) {
@@ -802,7 +802,7 @@ class SmartReporter implements Reporter {
         console.warn('⚠️  PDF export failed:', err);
       }
     } else if (this.options.exportPdf && !hasPro) {
-      console.log('   PDF export requires a Starter or Pro license — see stagewright.dev/pricing');
+      console.log('   PDF export requires a Starter or Pro license — see stagewright.dev/#pricing');
     }
 
     // Update history
@@ -832,7 +832,7 @@ class SmartReporter implements Reporter {
         process.exitCode = 1;
       }
     } else if (this.options.qualityGates && !hasPro) {
-      console.log('   Quality gates require a Starter or Pro license — see stagewright.dev/pricing');
+      console.log('   Quality gates require a Starter or Pro license — see stagewright.dev/#pricing');
     }
 
     // Quarantine (Starter feature) - log results (file already written above)
@@ -842,7 +842,7 @@ class SmartReporter implements Reporter {
     } else if (this.options.quarantine?.enabled && hasPro) {
       console.log('   Quarantine: no tests exceed flakiness threshold');
     } else if (this.options.quarantine?.enabled && !hasPro) {
-      console.log('   Quarantine requires a Starter or Pro license — see stagewright.dev/pricing');
+      console.log('   Quarantine requires a Starter or Pro license — see stagewright.dev/#pricing');
     }
 
     // Upload to StageWright Cloud if enabled
@@ -857,7 +857,7 @@ class SmartReporter implements Reporter {
 
     // Gentle upsell for community tier
     if (this.license.tier === 'community') {
-      console.log(`\n   Starter features available — see stagewright.dev/pricing`);
+      console.log(`\n   Starter features available — see stagewright.dev/#pricing`);
     }
   }
 

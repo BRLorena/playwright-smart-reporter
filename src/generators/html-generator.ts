@@ -377,7 +377,7 @@ function generateOverviewContent(
     </div>
   ` : (!hasPro ? `
     <div class="overview-section quality-gate-section">
-      <div class="quality-gate-card pro-feature-placeholder">
+      <div class="quality-gate-card pro-feature-placeholder gated-clickable" onclick="showUpgradeModal('Quality Gates', 'Set CI pass/fail thresholds — max failures, min pass rate, max flaky rate, min stability grade, and no-new-failures rules.')">
         <div class="gate-header">
           <div class="gate-title-row">
             <span class="section-icon">${icon('gauge')}</span>
@@ -424,7 +424,7 @@ function generateOverviewContent(
     </div>
   ` : (!hasPro ? `
     <div class="overview-section quarantine-section">
-      <div class="quarantine-card pro-feature-placeholder">
+      <div class="quarantine-card pro-feature-placeholder gated-clickable" onclick="showUpgradeModal('Flaky Test Quarantine', 'Automatically isolate flaky tests that exceed a configurable threshold, keeping your CI results clean and actionable.')">
         <div class="quarantine-header">
           <div class="quarantine-title-row">
             <span class="section-icon">${icon('lock')}</span>
@@ -453,7 +453,7 @@ function generateOverviewContent(
     </div>
   ` : (!hasPro ? `
     <div class="overview-section ai-health-section">
-      <div class="ai-health-card pro-feature-placeholder">
+      <div class="ai-health-card pro-feature-placeholder gated-clickable" onclick="showUpgradeModal('AI Suite Health Summary', 'Get an AI-powered executive summary combining failure clusters, flakiness trends, and performance data into actionable insights.')">
         <div class="ai-health-header">
           <div class="ai-health-title-row">
             <span class="section-icon">${icon('bot')}</span>
@@ -466,7 +466,64 @@ function generateOverviewContent(
     </div>
   ` : '');
 
+  // Upgrade CTA banner for Local (free) tier
+  const upgradeBannerHtml = !hasPro ? `
+    <div class="upgrade-banner" id="upgradeBanner">
+      <div class="upgrade-banner-content">
+        <div class="upgrade-banner-text">
+          <span class="upgrade-banner-icon">${icon('zap', 18)}</span>
+          <span><strong>Unlock the full suite</strong> — AI analysis, PDF exports, live controls, quality gates, and more from <strong>&pound;5/mo</strong></span>
+        </div>
+        <div class="upgrade-banner-actions">
+          <a class="upgrade-banner-btn" href="https://stagewright.dev/#pricing" target="_blank" rel="noopener">View Plans</a>
+          <button class="upgrade-banner-dismiss" onclick="dismissUpgradeBanner()" title="Dismiss" aria-label="Dismiss upgrade banner">&times;</button>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
+  // Feature usage summary card for Local (free) tier
+  const lockedFeatures = [
+    { name: 'AI Failure Analysis', desc: 'AI-powered root cause insights' },
+    { name: 'PDF / JSON / JUnit Export', desc: 'Share reports with stakeholders' },
+    { name: 'Live Run Controls', desc: 'Run, cancel, and filter from the dashboard' },
+    { name: 'Quality Gates', desc: 'CI pass/fail thresholds for your suite' },
+    { name: 'Flaky Test Quarantine', desc: 'Auto-isolate unreliable tests' },
+    { name: 'Premium Themes', desc: '6 additional themes + custom colours' },
+    { name: 'Custom Branding', desc: 'Logo, title, and footer customisation' },
+    { name: 'AI Suite Health Summary', desc: 'Executive overview of suite health' },
+  ];
+  const activeFeatures = [
+    'Stability Grades', 'Flakiness Detection', 'Performance Trends',
+    'Attachments Gallery', 'Trace Viewer', 'Run Comparison', 'CI Detection',
+  ];
+  const featureUsageHtml = !hasPro ? `
+    <div class="overview-section feature-usage-section">
+      <div class="feature-usage-card">
+        <div class="feature-usage-header">
+          <div class="feature-usage-title-row">
+            <span class="section-icon">${icon('package')}</span>
+            <span class="feature-usage-title">Your Plan: Local</span>
+          </div>
+          <a class="feature-usage-upgrade-link" href="https://stagewright.dev/#pricing" target="_blank" rel="noopener">Upgrade</a>
+        </div>
+        <div class="feature-usage-columns">
+          <div class="feature-usage-col">
+            <div class="feature-usage-col-header active-header">${icon('check', 14)} ${activeFeatures.length} Active</div>
+            ${activeFeatures.map(f => `<div class="feature-usage-item active">${escapeHtml(f)}</div>`).join('')}
+          </div>
+          <div class="feature-usage-col">
+            <div class="feature-usage-col-header locked-header">${icon('lock', 14)} ${lockedFeatures.length} Locked</div>
+            ${lockedFeatures.map(f => `<div class="feature-usage-item locked" title="${escapeHtml(f.desc)}">${escapeHtml(f.name)}</div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
   return `
+    ${upgradeBannerHtml}
+
     <!-- Hero Stats Row -->
     <div class="hero-stats">
       <div class="hero-stat-card health ${healthClass}">
@@ -589,6 +646,8 @@ function generateOverviewContent(
         </div>
       </div>
     </div>
+
+    ${featureUsageHtml}
   `;
 }
 
@@ -711,6 +770,8 @@ export function generateHtml(data: HtmlGeneratorData): GeneratedReport {
   // Feature flags
   const showGallery = options.enableGalleryView !== false;
   const showComparison = (options.enableComparison !== false && !!comparison);
+  const showLive = options.live?.enabled !== false; // Always show Live tab unless explicitly disabled
+  const liveConfigured = !!options.live?.enabled; // Actual live functionality configured
   const cspSafe = options.cspSafe === true;
   const licenseTier = data.licenseTier ?? 'community';
   const hasPro = licenseTier !== 'community';
@@ -873,15 +934,15 @@ ${options.exportJson ? `            <a class="export-menu-item" href="${outputBa
 ${options.exportJunit ? `            <a class="export-menu-item" href="${outputBasename}-junit.xml" download role="menuitem" style="text-decoration:none;color:inherit;">
               <span>${icon('tag')}</span> JUnit XML
             </a>` : ''}` : `            <div class="export-menu-divider" style="height:1px;background:var(--border-subtle);margin:4px 0;"></div>
-            <div class="export-menu-item export-premium-placeholder" style="opacity:0.4;cursor:default;pointer-events:none;">
+            <button class="export-menu-item export-premium-placeholder" style="opacity:0.5;cursor:pointer;" onclick="showUpgradeModal('PDF Report', 'Generate polished PDF reports in three variants — Executive Summary, Detailed Failures, and Full Report — perfect for sharing with stakeholders.')">
               <span>${icon('file-text')}</span> PDF Report <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>
-            </div>
-            <div class="export-menu-item export-premium-placeholder" style="opacity:0.4;cursor:default;pointer-events:none;">
+            </button>
+            <button class="export-menu-item export-premium-placeholder" style="opacity:0.5;cursor:pointer;" onclick="showUpgradeModal('Full JSON Data', 'Export your complete test results as structured JSON for custom dashboards, data pipelines, and integrations.')">
               <span>${icon('package')}</span> Full JSON Data <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>
-            </div>
-            <div class="export-menu-item export-premium-placeholder" style="opacity:0.4;cursor:default;pointer-events:none;">
+            </button>
+            <button class="export-menu-item export-premium-placeholder" style="opacity:0.5;cursor:pointer;" onclick="showUpgradeModal('JUnit XML', 'Export JUnit XML for CI/CD integration with Jenkins, GitHub Actions, Azure DevOps, and more.')">
               <span>${icon('tag')}</span> JUnit XML <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>
-            </div>`}
+            </button>`}
           </div>
         </div>
         <div class="theme-dropdown" id="themeDropdown">
@@ -944,6 +1005,22 @@ ${!hasPro ? `            </div>` : ''}
     <!-- Toast notifications container -->
     <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
+    <!-- Upgrade modal for gated features -->
+    ${!hasStarter ? `
+    <div class="upgrade-modal-overlay" id="upgradeModal" role="dialog" aria-modal="true" aria-labelledby="upgradeModalTitle" style="display:none">
+      <div class="upgrade-modal">
+        <button class="upgrade-modal-close" onclick="closeUpgradeModal()" aria-label="Close">&times;</button>
+        <div class="upgrade-modal-icon">${icon('lock', 32)}</div>
+        <h3 class="upgrade-modal-title" id="upgradeModalTitle">Unlock <span id="upgradeFeatureName"></span></h3>
+        <p class="upgrade-modal-desc" id="upgradeFeatureDesc"></p>
+        <div class="upgrade-modal-actions">
+          <a class="upgrade-modal-btn primary" href="https://stagewright.dev/#pricing" target="_blank" rel="noopener">View Plans</a>
+          <button class="upgrade-modal-btn secondary" onclick="closeUpgradeModal()">Maybe Later</button>
+        </div>
+      </div>
+    </div>
+    ` : ''}
+
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
       <!-- Progress Ring -->
@@ -1005,7 +1082,7 @@ ${!hasPro ? `            </div>` : ''}
             <span class="nav-label">Gallery</span>
           </button>
           ` : ''}
-          ${data.options.live?.enabled ? `
+          ${showLive ? `
           <button class="nav-item" data-view="live" onclick="switchView('live')" role="tab" aria-selected="false" aria-controls="view-live">
             <span class="nav-icon" aria-hidden="true">${icon('radio')}</span>
             <span class="nav-label">Live</span>
@@ -1228,9 +1305,9 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
         </div>
       </section>
       ` : ''}
-      ${data.options.live?.enabled ? `
+      ${showLive ? `
       <!-- Live View -->
-      <section class="view-panel${hasStarter ? '' : ' live-section-gated'}" id="view-live" role="tabpanel" aria-label="Live" style="display: none;">
+      <section class="view-panel${hasStarter ? '' : ' live-section-gated'}" id="view-live" role="tabpanel" aria-label="Live" style="display: none;"${!hasStarter ? ` onclick="showUpgradeModal('Live Run Controls', 'Run, cancel, and filter tests directly from the dashboard with real-time progress tracking.')"` : ''}>
         <div class="view-header">
           <h2 class="view-title">Live Execution</h2>
           <span class="live-header-badge" id="live-status-badge">
@@ -1373,10 +1450,10 @@ ${scriptBody}
 
 ${traceScript}
   </script>`}
-${data.options.live?.enabled ? `
+${liveConfigured ? `
   <script>
   (function initLiveView() {
-    var liveJsonlFile = ${JSON.stringify(escapeHtml(data.options.live.outputFile ?? '.smart-live-results.jsonl'))};
+    var liveJsonlFile = ${JSON.stringify(escapeHtml(data.options.live!.outputFile ?? '.smart-live-results.jsonl'))};
     var isLiveMode = document.documentElement.hasAttribute('data-live-mode');
     var liveCompleted = !isLiveMode;
     var liveStartTime = Date.now();
@@ -3198,9 +3275,10 @@ ${highContrastOverride}${customOverrides}
     }
     .live-run-row-hidden { display: none; }
     .live-section-gated {
-      opacity: 0.4 !important; pointer-events: none; filter: grayscale(0.6);
-      user-select: none; animation: none !important;
+      opacity: 0.4 !important; pointer-events: auto; filter: grayscale(0.6);
+      user-select: none; animation: none !important; cursor: pointer;
     }
+    .live-section-gated * { pointer-events: none; }
     .live-section-gated .live-run-row { display: flex; }
 
     /* ============================================
@@ -5490,6 +5568,218 @@ ${highContrastOverride}${customOverrides}
     .quarantine-more:hover { text-decoration: underline; }
     .quarantine-placeholder-desc {
       font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* Gated feature placeholders — clickable for upgrade modal */
+    .gated-clickable { cursor: pointer; transition: opacity 0.2s; }
+    .gated-clickable:hover { opacity: 0.6; }
+
+    /* ============================================
+       UPGRADE CTA BANNER
+    ============================================ */
+    .upgrade-banner {
+      background: linear-gradient(135deg, var(--accent-purple), #6366f1);
+      border-radius: 12px;
+      padding: 0.75rem 1.25rem;
+      margin-bottom: 1.25rem;
+      animation: upgradeBannerSlideIn 0.4s ease-out;
+    }
+    @keyframes upgradeBannerSlideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .upgrade-banner-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .upgrade-banner-text {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #fff;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    .upgrade-banner-icon { flex-shrink: 0; color: #fbbf24; }
+    .upgrade-banner-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+    .upgrade-banner-btn {
+      display: inline-block;
+      background: #fff;
+      color: #6366f1;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.4rem 1rem;
+      border-radius: 6px;
+      text-decoration: none;
+      transition: background 0.2s;
+    }
+    .upgrade-banner-btn:hover { background: #f0f0ff; }
+    .upgrade-banner-dismiss {
+      background: none;
+      border: none;
+      color: rgba(255,255,255,0.7);
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 0 0.25rem;
+      line-height: 1;
+    }
+    .upgrade-banner-dismiss:hover { color: #fff; }
+
+    /* ============================================
+       UPGRADE MODAL
+    ============================================ */
+    .upgrade-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: modalFadeIn 0.2s ease-out;
+    }
+    @keyframes modalFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .upgrade-modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 2rem;
+      max-width: 420px;
+      width: 90%;
+      text-align: center;
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.3);
+      animation: modalSlideUp 0.25s ease-out;
+    }
+    @keyframes modalSlideUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .upgrade-modal-close {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .upgrade-modal-close:hover { color: var(--text-primary); }
+    .upgrade-modal-icon {
+      color: var(--accent-purple);
+      margin-bottom: 0.75rem;
+    }
+    .upgrade-modal-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 0 0 0.5rem;
+    }
+    .upgrade-modal-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+      margin: 0 0 1.25rem;
+    }
+    .upgrade-modal-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+    }
+    .upgrade-modal-btn {
+      padding: 0.5rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      border: none;
+      transition: all 0.2s;
+    }
+    .upgrade-modal-btn.primary {
+      background: var(--accent-purple);
+      color: #fff;
+    }
+    .upgrade-modal-btn.primary:hover { filter: brightness(1.15); }
+    .upgrade-modal-btn.secondary {
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+    }
+    .upgrade-modal-btn.secondary:hover { background: var(--border-subtle); }
+
+    /* ============================================
+       FEATURE USAGE CARD
+    ============================================ */
+    .feature-usage-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      border-left: 4px solid var(--accent-purple);
+    }
+    .feature-usage-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .feature-usage-title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .feature-usage-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+    }
+    .feature-usage-upgrade-link {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--accent-purple);
+      text-decoration: none;
+    }
+    .feature-usage-upgrade-link:hover { text-decoration: underline; }
+    .feature-usage-columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .feature-usage-col-header {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .active-header { color: var(--accent-green); }
+    .locked-header { color: var(--accent-purple); }
+    .feature-usage-item {
+      font-size: 0.78rem;
+      padding: 0.2rem 0;
+      color: var(--text-secondary);
+    }
+    .feature-usage-item.locked {
       color: var(--text-muted);
     }
 
@@ -9004,6 +9294,57 @@ function generateScripts(
         setTimeout(() => toast.remove(), 300);
       }, 3000);
     }
+
+    // Upgrade modal
+    function showUpgradeModal(featureName, featureDesc) {
+      var modal = document.getElementById('upgradeModal');
+      if (!modal) return;
+      document.getElementById('upgradeFeatureName').textContent = featureName;
+      document.getElementById('upgradeFeatureDesc').textContent = featureDesc;
+      modal.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+    }
+    function closeUpgradeModal() {
+      var modal = document.getElementById('upgradeModal');
+      if (!modal) return;
+      modal.style.display = 'none';
+      document.body.style.overflow = '';
+    }
+    // Close modal on overlay click or Escape
+    (function() {
+      var modal = document.getElementById('upgradeModal');
+      if (!modal) return;
+      modal.addEventListener('click', function(e) {
+        if (e.target === modal) closeUpgradeModal();
+      });
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && modal.style.display !== 'none') closeUpgradeModal();
+      });
+    })();
+
+    // Upgrade banner dismiss
+    function dismissUpgradeBanner() {
+      var banner = document.getElementById('upgradeBanner');
+      if (banner) {
+        banner.style.transition = 'opacity 0.3s, max-height 0.3s';
+        banner.style.opacity = '0';
+        banner.style.maxHeight = '0';
+        banner.style.overflow = 'hidden';
+        banner.style.marginBottom = '0';
+        banner.style.padding = '0';
+        setTimeout(function() { banner.remove(); }, 300);
+        try { sessionStorage.setItem('sw-banner-dismissed', '1'); } catch(e) {}
+      }
+    }
+    // Restore dismissed state
+    (function() {
+      try {
+        if (sessionStorage.getItem('sw-banner-dismissed') === '1') {
+          var b = document.getElementById('upgradeBanner');
+          if (b) b.remove();
+        }
+      } catch(e) {}
+    })();
 
     // Theme dropdown menu
     function toggleThemeMenu() {

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.3] - 2026-03-04
+
+### Added
+
+- **Upgrade CTA Banner**: Dismissible banner at the top of the Overview tab for Local (free) tier users, linking to pricing
+- **Contextual Upgrade Modals**: Clicking any gated feature (Quality Gates, Quarantine, AI Health Summary, PDF/JSON/JUnit exports, Live controls) now opens a descriptive modal with upgrade CTA instead of silently blocking
+- **Feature Usage Summary Card**: "Your Plan: Local" card in Overview showing active vs locked features at a glance
+- **Live tab always visible**: The Live tab now appears by default for all users; Local tier sees it gated as an upsell. Disable explicitly with `live: { enabled: false }`
+
+### Changed
+
+- Renamed "Community" tier label to "Local" across the report UI
+- All pricing links now point to `stagewright.dev/#pricing` (was broken `/pricing` route)
+- Updated README feature table with benefit-focused wording
+
 ## [1.6.0] - 2026-03-04
 
 ### Added

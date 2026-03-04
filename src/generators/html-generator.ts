@@ -442,8 +442,10 @@ function generateOverviewContent(
     <div class="overview-section ai-health-section">
       <div class="ai-health-card">
         <div class="ai-health-header">
-          <span class="section-icon">${icon('bot')}</span>
-          <span class="ai-health-title">AI Health Summary</span>
+          <div class="ai-health-title-row">
+            <span class="section-icon">${icon('bot')}</span>
+            <span class="ai-health-title">AI Health Summary</span>
+          </div>
           <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
         </div>
         <div class="ai-health-body ai-markdown">${renderMarkdownLite(aiSuiteHealthSummary)}</div>
@@ -453,8 +455,10 @@ function generateOverviewContent(
     <div class="overview-section ai-health-section">
       <div class="ai-health-card pro-feature-placeholder">
         <div class="ai-health-header">
-          <span class="section-icon">${icon('bot')}</span>
-          <span class="ai-health-title">AI Health Summary</span>
+          <div class="ai-health-title-row">
+            <span class="section-icon">${icon('bot')}</span>
+            <span class="ai-health-title">AI Health Summary</span>
+          </div>
           <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
         </div>
         <div class="ai-health-placeholder-desc">AI-powered executive summary of your test suite health</div>
@@ -5304,9 +5308,14 @@ ${highContrastOverride}${customOverrides}
     }
     .ai-health-header {
       display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .ai-health-title-row {
+      display: flex;
       align-items: center;
       gap: 0.5rem;
-      margin-bottom: 0.75rem;
     }
     .ai-health-title {
       font-weight: 600;

@@ -3,7 +3,7 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { exec, spawn, type ChildProcess } from 'child_process';
 import { buildSseHandler } from '../live/sse-handler';
 
 const MIME_TYPES: Record<string, string> = {
@@ -41,12 +41,14 @@ Options:
   --live                Enable SSE endpoint for live reporting
   --live-file <path>    Path to live results JSONL (default: .smart-live-results.jsonl)
   --run-command <cmd>   Command to run tests (enables /run endpoint)
+  --cwd <dir>           Working directory for --run-command (default: current directory)
   -h, --help            Show this help message
 
 Examples:
   playwright-smart-reporter-serve
   playwright-smart-reporter-serve ./example/smart-report.html
   playwright-smart-reporter-serve ./example --port 3000
+  playwright-smart-reporter-serve --live --run-command "npx playwright test" --cwd ./my-project
 `);
 }
 
@@ -57,7 +59,9 @@ interface ServeOptions {
   live: boolean;
   liveFile: string;
   runCommand: string;
+  runCwd: string;
   running: boolean;
+  lastExitCode: number | null;
 }
 
 function parseArgs(argv: string[]): ServeOptions {
@@ -75,7 +79,9 @@ function parseArgs(argv: string[]): ServeOptions {
     live: false,
     liveFile: '.smart-live-results.jsonl',
     runCommand: '',
+    runCwd: process.cwd(),
     running: false,
+    lastExitCode: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -90,6 +96,8 @@ function parseArgs(argv: string[]): ServeOptions {
       options.liveFile = args[++i] || '.smart-live-results.jsonl';
     } else if (arg === '--run-command') {
       options.runCommand = args[++i] || '';
+    } else if (arg === '--cwd') {
+      options.runCwd = path.resolve(process.cwd(), args[++i] || '.');
     } else if (!arg.startsWith('-') && !options.reportPath) {
       options.reportPath = arg;
     }
@@ -154,17 +162,76 @@ function openBrowser(url: string): void {
   });
 }
 
+/**
+ * Sanitize a string for safe shell interpolation — strip dangerous metacharacters.
+ */
+function sanitizeShellArg(input: string): string {
+  return input.replace(/[;&`$(){}!\\\n\r]/g, '');
+}
+
+/**
+ * Build filtered Playwright command from base command + filter payload.
+ */
+function buildFilteredCommand(
+  baseCommand: string,
+  filters: { files?: string[]; grep?: string }
+): string {
+  const parts = [baseCommand];
+
+  if (filters.files && Array.isArray(filters.files) && filters.files.length > 0) {
+    for (const file of filters.files) {
+      const safe = sanitizeShellArg(file);
+      if (!safe) continue;
+      // Prefix with ./ to prevent substring matching (e.g. "demo.spec.ts" matching "feature-demo.spec.ts")
+      const anchored = safe.startsWith('./') || safe.startsWith('/') ? safe : `./${safe}`;
+      parts.push(`"${anchored}"`);
+    }
+  }
+
+  if (filters.grep && typeof filters.grep === 'string') {
+    const safe = sanitizeShellArg(filters.grep);
+    if (safe) parts.push(`--grep "${safe}"`);
+  }
+
+  return parts.join(' ');
+}
+
 function main(): void {
   const options = parseArgs(process.argv);
   const { dir, file } = resolveReport(options.reportPath);
 
   let sseHandler: ReturnType<typeof buildSseHandler> | null = null;
   if (options.live) {
-    const liveFilePath = path.resolve(dir, options.liveFile);
+    // Resolve live file relative to runCwd (where the reporter writes) when available
+    const liveBase = options.runCommand ? options.runCwd : process.cwd();
+    const liveFilePath = path.resolve(liveBase, options.liveFile);
     sseHandler = buildSseHandler(liveFilePath);
   }
 
+  let runChild: ChildProcess | null = null;
+
+  function isLocalhostRequest(req: http.IncomingMessage): boolean {
+    const remoteAddr = req.socket.remoteAddress || '';
+    return remoteAddr.includes('127.0.0.1') || remoteAddr.includes('::1');
+  }
+
+  function setRunCors(res: http.ServerResponse, req: http.IncomingMessage): void {
+    const origin = req.headers.origin || '';
+    if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    }
+  }
+
   const server = http.createServer((req, res) => {
+    // CORS preflight for /run
+    if (req.url === '/run' && req.method === 'OPTIONS') {
+      setRunCors(res, req);
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     // SSE endpoint for live reporting
     if (sseHandler && req.url === '/sse') {
       res.writeHead(200, {
@@ -180,10 +247,34 @@ function main(): void {
       return;
     }
 
+    // Cancel test run endpoint
+    if (req.url === '/run' && req.method === 'DELETE' && options.runCommand) {
+      setRunCors(res, req);
+      if (!isLocalhostRequest(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Only localhost requests allowed' }));
+        return;
+      }
+      if (!options.running || !runChild) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'No test run in progress' }));
+        return;
+      }
+      // Kill entire process group (shell + child processes)
+      try {
+        process.kill(-runChild.pid!, 'SIGTERM');
+      } catch {
+        runChild.kill('SIGTERM');
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'cancelled' }));
+      return;
+    }
+
     // Run tests endpoint (only when --run-command is configured)
     if (req.url === '/run' && req.method === 'POST' && options.runCommand) {
-      const remoteAddr = req.socket.remoteAddress || '';
-      if (!remoteAddr.includes('127.0.0.1') && !remoteAddr.includes('::1')) {
+      setRunCors(res, req);
+      if (!isLocalhostRequest(req)) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Only localhost requests allowed' }));
         return;
@@ -195,27 +286,60 @@ function main(): void {
         return;
       }
 
-      options.running = true;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'started', command: options.runCommand }));
-
-      const child = exec(options.runCommand, { cwd: process.cwd() }, (err) => {
-        options.running = false;
-        if (err) {
-          console.log(`\n  Test run finished with exit code ${err.code ?? 1}`);
-        } else {
-          console.log('\n  Test run finished successfully');
+      // Read POST body for filter parameters
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        let filters: { files?: string[]; grep?: string } = {};
+        try {
+          if (body) filters = JSON.parse(body);
+        } catch {
+          // ignore malformed body — run unfiltered
         }
-      });
 
-      child.stdout?.on('data', (data) => process.stdout.write(data));
-      child.stderr?.on('data', (data) => process.stderr.write(data));
+        const fullCommand = buildFilteredCommand(options.runCommand, filters);
+
+        // Truncate live JSONL so SSE clients don't replay old events
+        const liveFilePath = path.resolve(options.runCwd, options.liveFile);
+        try { fs.writeFileSync(liveFilePath, ''); } catch { /* ok if it doesn't exist yet */ }
+
+        options.running = true;
+        options.lastExitCode = null;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'started', command: fullCommand }));
+
+        runChild = spawn(fullCommand, {
+          cwd: options.runCwd,
+          shell: true,
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        runChild.stdout?.on('data', (data: Buffer) => process.stdout.write(data));
+        runChild.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
+
+        runChild.on('close', (code, signal) => {
+          options.running = false;
+          runChild = null;
+          if (signal) {
+            options.lastExitCode = -1;
+            console.log('\n  Test run cancelled');
+          } else if (code && code !== 0) {
+            options.lastExitCode = code;
+            console.log(`\n  Test run finished with exit code ${code}`);
+          } else {
+            options.lastExitCode = 0;
+            console.log('\n  Test run finished successfully');
+          }
+        });
+      });
       return;
     }
 
     if (req.url === '/run' && req.method === 'GET' && options.runCommand) {
+      setRunCors(res, req);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ running: options.running, command: options.runCommand }));
+      res.end(JSON.stringify({ running: options.running, command: options.runCommand, lastExitCode: options.lastExitCode }));
       return;
     }
 
@@ -273,6 +397,29 @@ function main(): void {
     const origin = req.headers.origin || '';
     const corsHeader = /^https?:\/\/localhost(:\d+)?$/.test(origin) ? origin : '';
 
+    // When live mode is enabled and this is the report HTML, inject SSE URL and run capability
+    if (options.live && ext === '.html') {
+      let body = fs.readFileSync(filePath, 'utf-8');
+      if (body.includes('data-live-mode')) {
+        body = body.replace(/__SSE_URL__/g, '/sse');
+      }
+      if (options.runCommand) {
+        body = body.replace(/__RUN_ENABLED__/g, 'true');
+      }
+      const buf = Buffer.from(body, 'utf-8');
+      const headers: Record<string, string | number> = {
+        'Content-Type': contentType,
+        'Content-Length': buf.byteLength,
+        'Cache-Control': 'no-cache',
+      };
+      if (corsHeader) {
+        headers['Access-Control-Allow-Origin'] = corsHeader;
+      }
+      res.writeHead(200, headers);
+      res.end(buf);
+      return;
+    }
+
     const headers: Record<string, string | number> = {
       'Content-Type': contentType,
       'Content-Length': fs.statSync(filePath).size,
@@ -286,7 +433,7 @@ function main(): void {
     fs.createReadStream(filePath).pipe(res);
   }
 
-  server.listen(options.port, () => {
+  server.listen(options.port, '127.0.0.1', () => {
     const addr = server.address();
     const port = typeof addr === 'object' && addr ? addr.port : options.port;
     const url = `http://localhost:${port}`;

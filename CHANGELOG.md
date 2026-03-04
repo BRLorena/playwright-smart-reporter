@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-03-04
+
+### Added
+
+- **Live Section Starter Tier Gating**: Live execution controls (run/cancel/filter) now require Starter tier or above. Community tier users see the Live tab with a "Starter" badge and a greyed-out preview of the full interface
+- **Enriched Live Failure Items**: Static failure feed now shows clickable cards with screenshot thumbnails, full error text, and "View Details" links that navigate to the Tests tab detail view
+- **Live SSE Failure Context**: During live runs, failure items include structured layout with `data-testid` and a "View details after run completes" label
+- **`prefers-reduced-motion` support**: Counter animations now respect the user's reduced motion preference
+
+### Changed
+
+- Error truncation in live SSE events increased from 200 to 500 characters for more useful failure previews
+- Staggered list animations now play only once via `.animate-entrance` class (no re-triggering on tab switch)
+- `setStatusAccent()` queries scoped to `#view-tests` to prevent cross-view side effects
+- Design enhancement comments renumbered sequentially (1–9)
+
+### Fixed
+
+- Live section no longer flashes during tab switch when gated (disabled `viewFadeIn` animation on `.live-section-gated`)
+- Run-row visibility now uses CSS class (`.live-run-row-hidden`) instead of inline style, fixing specificity issues with gated override
+- Dark theme hover fallback changed from `rgba(0,0,0,0.04)` to `rgba(128,128,128,0.1)` for visibility
+- Removed duplicate `.hero-stat-card` and `.insight-card` transition/hover rules (overridden by design enhancements)
+- Moved `position: relative` to canonical `.top-bar` rule (was duplicated)
+- Removed unnecessary `!important` from `barGrow` keyframe
+- Screenshot thumbnails in failure feed guard against base64 data URIs to prevent report bloat
+
+### Security
+
+- Live run controls are cosmetic-only gating (CSS + JS) — documented that actual run capability requires server-side license validation on the `/run` endpoint
+
 ## [1.5.0] - 2026-03-02
 
 ### Added

@@ -38,6 +38,10 @@ export class LiveWriter {
     return new LiveWriter({ outputFile: '', noop: true });
   }
 
+  getOutputPath(): string {
+    return this.outputFile;
+  }
+
   start(totalExpected: number, ciInfo?: CIInfo): void {
     if (this.noop) return;
     this.totalExpected = totalExpected;
@@ -75,7 +79,7 @@ export class LiveWriter {
     const counters = this.computeCounters();
 
     const errorSummary = input.error
-      ? input.error.split('\n')[0].slice(0, 200)
+      ? input.error.split('\n')[0].slice(0, 500)
       : undefined;
 
     const event: LiveTestEvent = {

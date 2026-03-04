@@ -69,7 +69,7 @@ import { generateExecutivePdf, type PdfThemeName } from './generators/executive-
 import { formatDuration, stripAnsiCodes, sanitizeFilename, detectCIInfo } from './utils';
 import { buildPlaywrightStyleAiPrompt } from './ai/prompt-builder';
 import type { CIInfo } from './types';
-import { LiveWriter, generateLiveDashboard } from './live';
+import { LiveWriter, generateLiveReportPage } from './live';
 
 // ============================================================================
 // Smart Reporter
@@ -227,14 +227,19 @@ class SmartReporter implements Reporter {
     const totalTests = suite.allTests().length;
     this.liveWriter.start(totalTests, this.ciInfo);
 
-    // Generate live dashboard HTML alongside the live results file
-    if (this.options.live?.enabled && this.options.live?.dashboard !== false) {
-      const liveOutputFile = this.options.live?.outputFile ?? '.smart-live-results.jsonl';
-      const dashboardPath = path.resolve(this.outputDir, 'smart-live.html');
-      const dashboardHtml = generateLiveDashboard({ jsonlFile: liveOutputFile });
-      fs.writeFileSync(dashboardPath, dashboardHtml);
-      console.log(`\n📡 Live dashboard: ${dashboardPath}`);
-      console.log(`   Serve for SSE: npx playwright-smart-reporter-serve --live "${dashboardPath}"`);
+    // Write live report page to the main report output path
+    // When tests complete, onEnd() will overwrite this with the full static report
+    if (this.options.live?.enabled) {
+      const reportPath = path.resolve(this.outputDir, this.options.outputFile ?? 'smart-report.html');
+      const liveRelPath = path.relative(path.dirname(reportPath), this.liveWriter.getOutputPath());
+      fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+      fs.writeFileSync(reportPath, generateLiveReportPage({
+        jsonlFile: liveRelPath,
+        title: this.options.branding?.title,
+        theme: this.options.theme?.preset,
+      }));
+      console.log(`\n📡 Live report: ${reportPath}`);
+      console.log(`   Serve for SSE: npx playwright-smart-reporter-serve --live "${reportPath}"`);
     }
   }
 
@@ -279,7 +284,8 @@ class SmartReporter implements Reporter {
     // Secondary source: annotations (for backwards compatibility)
     for (const a of test.annotations) {
       if (a.type === 'tag' || a.type.startsWith('@')) {
-        const tag = a.type.startsWith('@') ? a.type : `@${a.description || a.type}`;
+        const rawTag = a.type.startsWith('@') ? a.type : (a.description || a.type);
+        const tag = rawTag.startsWith('@') ? rawTag : `@${rawTag}`;
         if (!tags.includes(tag)) tags.push(tag);
       }
     }
@@ -499,6 +505,9 @@ class SmartReporter implements Reporter {
     this.results = Array.from(this.resultsMap.values());
 
     // Signal live reporting that the run is complete
+    // Note: JSONL file is intentionally NOT cleaned up here — the SSE handler
+    // may still need to push the 'complete' event to connected dashboards.
+    // The file is truncated automatically on the next run via LiveWriter.start().
     this.liveWriter.complete(Date.now() - this.startTime);
 
     // Get failure clusters

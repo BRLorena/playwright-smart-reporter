@@ -505,6 +505,85 @@ describe('flaky filter', () => {
 
     expect(html).toContain('data-flaky="false"');
   });
+
+  describe('live section tier gating', () => {
+    it('adds live-section-gated class to section for community tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('view-panel live-section-gated');
+      expect(html).toContain('Starter');
+    });
+
+    it('does not add live-section-gated to section for starter tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'starter',
+      };
+
+      const { html } = generateHtml(data);
+
+      // The section element should not have the gated class (CSS definition will still contain the string)
+      expect(html).not.toContain('view-panel live-section-gated');
+    });
+
+    it('does not render live section when live is not enabled', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).not.toContain('view-live');
+    });
+
+    it('renders Starter badge on nav tab for community tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      // The nav button for Live should contain the Starter badge
+      const navMatch = html.match(/data-view="live"[\s\S]*?<\/button>/);
+      expect(navMatch).toBeTruthy();
+      expect(navMatch![0]).toContain('Starter');
+    });
+
+    it('does not render Starter badge on nav tab for pro tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'pro',
+      };
+
+      const { html } = generateHtml(data);
+
+      const navMatch = html.match(/data-view="live"[\s\S]*?<\/button>/);
+      expect(navMatch).toBeTruthy();
+      expect(navMatch![0]).not.toContain('Starter');
+    });
+  });
 });
 
 describe('card-generator', () => {

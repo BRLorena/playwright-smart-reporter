@@ -43,7 +43,9 @@ The free tier includes everything you need for local test reporting. Paid plans 
 | Artifact gallery & trace viewer | ✅ | ✅ | ✅ |
 | Network logs & step timeline | ✅ | ✅ | ✅ |
 | CI auto-detection & notifications | ✅ | ✅ | ✅ |
+| Live execution progress (read-only) | ✅ | ✅ | ✅ |
 | 4 built-in themes (System, Light, Dark, High Contrast) | ✅ | ✅ | ✅ |
+| Live run/cancel/filter controls | | ✅ | ✅ |
 | AI failure analysis (managed) | | 2,000/mo | 5,000/mo |
 | 6 additional themes | | ✅ | ✅ |
 | Executive PDF export (3 variants) | | ✅ | ✅ |

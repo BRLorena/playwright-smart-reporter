@@ -174,15 +174,19 @@ function generateSparkline(values: number[], color: string, gradientId: string, 
     return [(points[i + 1][0] - points[i - 1][0]) / 2, (points[i + 1][1] - points[i - 1][1]) / 2];
   });
 
-  // Build cubic bezier path segments
+  // Build cubic bezier path segments (clamp control points to plot area)
+  const spkYMin = padTop;
+  const spkYMax = H - padBottom;
+  const clampSpkY = (y: number) => Math.max(spkYMin, Math.min(spkYMax, y));
+
   let linePath = `M${points[0][0].toFixed(1)},${points[0][1].toFixed(1)}`;
   for (let i = 0; i < n - 1; i++) {
     const p0 = points[i], p1 = points[i + 1];
     const t0 = tangents[i], t1 = tangents[i + 1];
     const cp1x = p0[0] + t0[0] / 3;
-    const cp1y = p0[1] + t0[1] / 3;
+    const cp1y = clampSpkY(p0[1] + t0[1] / 3);
     const cp2x = p1[0] - t1[0] / 3;
-    const cp2y = p1[1] - t1[1] / 3;
+    const cp2y = clampSpkY(p1[1] - t1[1] / 3);
     linePath += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
   }
 
@@ -566,17 +570,6 @@ function generateOverviewContent(
             </div>
           </div>
         ` : ''}
-        <div class="insight-card clickable" onclick="switchView('tests')" title="View all tests">
-          <div class="insight-icon">${icon('bar-chart-2', 24)}</div>
-          <div class="insight-content">
-            <div class="insight-label">Test Distribution</div>
-            <div class="insight-mini-stats">
-              <span class="mini-stat"><span class="dot passed"></span>${passed} passed</span>
-              <span class="mini-stat"><span class="dot failed"></span>${failed} failed</span>
-              <span class="mini-stat"><span class="dot skipped"></span>${skipped} skipped</span>
-            </div>
-          </div>
-        </div>
         <div class="insight-card clickable" onclick="switchView('trends')" title="View trends">
           <div class="insight-icon">${icon('trending-up', 24)}</div>
           <div class="insight-content">
@@ -717,6 +710,9 @@ export function generateHtml(data: HtmlGeneratorData): GeneratedReport {
   const cspSafe = options.cspSafe === true;
   const licenseTier = data.licenseTier ?? 'community';
   const hasPro = licenseTier !== 'community';
+  // Starter = any non-community tier (starter|pro|team). Identical to hasPro today;
+  // kept separate so Live gating can diverge from Pro gating if tiers evolve.
+  const hasStarter = licenseTier !== 'community';
   const quarantinedTestIds = data.quarantinedTestIds;
   const quarantineCount = quarantinedTestIds?.size ?? 0;
   const outputBasename = escapeHtml(data.outputBasename ?? 'smart-report');
@@ -1003,6 +999,14 @@ ${hasPro ? `            <div style="height:1px;background:var(--border-subtle);m
             <span class="nav-label">Gallery</span>
           </button>
           ` : ''}
+          ${data.options.live?.enabled ? `
+          <button class="nav-item" data-view="live" onclick="switchView('live')" role="tab" aria-selected="false" aria-controls="view-live">
+            <span class="nav-icon" aria-hidden="true">${icon('radio')}</span>
+            <span class="nav-label">Live</span>
+            ${!hasStarter ? `<span class="premium-badge" style="font-size:8px;background:var(--accent-blue);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>` : ''}
+            <span class="live-nav-dot" id="live-nav-indicator"></span>
+          </button>
+          ` : ''}
         </div>
       </nav>
 
@@ -1218,6 +1222,112 @@ ${quarantineCount > 0 ? `            <button class="filter-chip attention-quaran
         </div>
       </section>
       ` : ''}
+      ${data.options.live?.enabled ? `
+      <!-- Live View -->
+      <section class="view-panel${hasStarter ? '' : ' live-section-gated'}" id="view-live" role="tabpanel" aria-label="Live" style="display: none;">
+        <div class="view-header">
+          <h2 class="view-title">Live Execution</h2>
+          <span class="live-header-badge" id="live-status-badge">
+            <span class="live-header-dot" id="live-header-dot"></span>
+            <span id="live-status-text">Completed</span>
+          </span>
+        </div>
+        <div class="live-controls-wrapper" id="live-controls-wrapper">
+          <div class="live-run-row live-run-row-hidden" id="live-run-row">
+            <button class="live-run-btn" id="live-run-btn" onclick="runTests()">Run Tests</button>
+            <button class="live-cancel-btn" id="live-cancel-btn" onclick="cancelTests()" style="display:none">Cancel</button>
+            <span class="live-filter-summary" id="live-filter-summary"></span>
+            <button class="live-filter-toggle" id="live-filter-toggle" onclick="toggleFilterPanel()" title="Filter tests">
+              ${icon('filter', 16)} <span id="live-filter-toggle-label">Filters</span>
+            </button>
+          </div>
+          <div class="live-filter-panel" id="live-filter-panel" style="display:none">
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('grep')">
+                <span>Grep (title match)</span>
+                <span class="live-filter-chevron" id="live-filter-chevron-grep">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-grep">
+                <input type="text" class="live-filter-grep-input" id="live-filter-grep" placeholder="e.g. login, checkout flow..." oninput="cascadeFilters()">
+              </div>
+            </div>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('tags')">
+                <span>Tags</span>
+                <span class="live-filter-count" id="live-filter-tags-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-tags">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-tags">
+                <div class="live-filter-chips" id="live-filter-tags-chips"></div>
+              </div>
+            </div>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('files')">
+                <span>Files</span>
+                <span class="live-filter-count" id="live-filter-files-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-files">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-files" style="display:none">
+                <div class="live-filter-file-actions">
+                  <button class="live-filter-action-btn" onclick="selectAllFiles(true)">All</button>
+                  <button class="live-filter-action-btn" onclick="selectAllFiles(false)">None</button>
+                </div>
+                <div class="live-filter-file-list" id="live-filter-files-list"></div>
+              </div>
+            </div>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('suites')">
+                <span>Suites</span>
+                <span class="live-filter-count" id="live-filter-suites-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-suites">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-suites" style="display:none">
+                <div class="live-filter-file-list" id="live-filter-suites-list"></div>
+              </div>
+            </div>
+            <div class="live-filter-bar-actions">
+              <button class="live-filter-clear-btn" id="live-filter-clear" onclick="clearAllFilters()" style="display:none">Clear all filters</button>
+            </div>
+          </div>
+        </div>
+        <div class="live-content">
+          <div class="live-elapsed-row">
+            <span class="live-elapsed-label">Elapsed</span>
+            <span class="live-elapsed-value" id="live-elapsed">${formatDuration(totalDuration)}</span>
+          </div>
+          <div class="live-progress-track" id="live-progress-track">
+            <div class="live-seg live-seg-passed" id="live-seg-passed" style="width:${total > 0 ? ((passed / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-failed" id="live-seg-failed" style="width:${total > 0 ? ((failed / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-flaky" id="live-seg-flaky" style="width:${total > 0 ? ((flaky / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-skipped" id="live-seg-skipped" style="width:${total > 0 ? ((skipped / total) * 100).toFixed(1) : 0}%"></div>
+          </div>
+          <div class="live-progress-label" id="live-progress-label">${total} / ${total} tests</div>
+          <div class="live-counters">
+            <div class="live-counter-card live-c-passed"><div class="live-counter-value" id="live-counter-passed">${passed}</div><div class="live-counter-label">Passed</div></div>
+            <div class="live-counter-card live-c-failed"><div class="live-counter-value" id="live-counter-failed">${failed}</div><div class="live-counter-label">Failed</div></div>
+            <div class="live-counter-card live-c-flaky"><div class="live-counter-value" id="live-counter-flaky">${flaky}</div><div class="live-counter-label">Flaky</div></div>
+            <div class="live-counter-card live-c-skipped"><div class="live-counter-value" id="live-counter-skipped">${skipped}</div><div class="live-counter-label">Skipped</div></div>
+          </div>
+          <div class="live-failure-section">
+            <h3>Failures</h3>
+            <div id="live-failure-feed">${results.filter(r => r.status === 'failed' || r.status === 'timedOut').map(r => {
+              const failCardId = sanitizeId(r.testId);
+              return `<div class="live-failure-item live-failure-clickable" data-testid="${escapeHtml(r.testId)}" onclick="selectTest('${failCardId}'); switchView('tests');">
+                <div class="live-failure-item-main">
+                  ${r.screenshot && !r.screenshot.startsWith('data:') ? `<img class="live-failure-thumb" src="${r.screenshot}" alt="Failure screenshot">` : ''}
+                  <div class="live-failure-item-text">
+                    <div class="live-failure-title">${escapeHtml(r.title)}</div>
+                    <div class="live-failure-file">${escapeHtml(r.file)}${r.retry > 0 ? ` (retry ${r.retry})` : ''}</div>
+                    ${r.error ? `<div class="live-failure-error">${escapeHtml(r.error.split('\\n')[0])}</div>` : ''}
+                  </div>
+                </div>
+                <span class="live-failure-view-link">View Details &rarr;</span>
+              </div>`;
+            }).join('')}</div>
+          </div>
+        </div>
+      </section>
+      ` : ''}
     </main>
   </div>
 
@@ -1257,6 +1367,636 @@ ${scriptBody}
 
 ${traceScript}
   </script>`}
+${data.options.live?.enabled ? `
+  <script>
+  (function initLiveView() {
+    var liveJsonlFile = ${JSON.stringify(escapeHtml(data.options.live.outputFile ?? '.smart-live-results.jsonl'))};
+    var isLiveMode = document.documentElement.hasAttribute('data-live-mode');
+    var liveCompleted = !isLiveMode;
+    var liveStartTime = Date.now();
+    var liveTotalExpected = 0;
+    var liveTimerRunning = isLiveMode;
+    var liveEventSource = null;
+    var livePollTimer = null;
+    var liveIgnoreEvents = false;
+
+    function tickLiveElapsed() {
+      if (!liveTimerRunning) return;
+      var s = Math.floor((Date.now() - liveStartTime) / 1000);
+      var m = Math.floor(s / 60);
+      var el = document.getElementById('live-elapsed');
+      if (el) el.textContent = m > 0 ? m + 'm ' + (s % 60) + 's' : s + 's';
+      setTimeout(tickLiveElapsed, 1000);
+    }
+
+    function escLive(s) {
+      var d = document.createElement('div');
+      d.appendChild(document.createTextNode(s));
+      return d.innerHTML;
+    }
+
+    function updateLiveUI(counters) {
+      liveTotalExpected = counters.totalExpected || liveTotalExpected || 1;
+      var completed = (counters.passed||0)+(counters.failed||0)+(counters.flaky||0)+(counters.skipped||0);
+      document.getElementById('live-counter-passed').textContent = counters.passed||0;
+      document.getElementById('live-counter-failed').textContent = counters.failed||0;
+      document.getElementById('live-counter-flaky').textContent = counters.flaky||0;
+      document.getElementById('live-counter-skipped').textContent = counters.skipped||0;
+      document.getElementById('live-seg-passed').style.width = ((counters.passed||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-failed').style.width = ((counters.failed||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-flaky').style.width = ((counters.flaky||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-skipped').style.width = ((counters.skipped||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-progress-label').textContent = completed+' / '+liveTotalExpected+' tests';
+    }
+
+    function addLiveFailure(ev) {
+      var feed = document.getElementById('live-failure-feed');
+      var id = ev.testId || ev.title || '';
+      var safeId = 'live-fail-' + id.replace(/[^a-zA-Z0-9]/g, '_');
+      var existing = document.getElementById(safeId);
+      var html = '<div class="live-failure-item-main"><div class="live-failure-item-text">'
+        +'<div class="live-failure-title">'+escLive(ev.title||'')+'</div>'
+        +'<div class="live-failure-file">'+escLive(ev.file||'')+(ev.retry > 0 ? ' (retry '+ev.retry+')' : '')+'</div>'
+        +(ev.error ? '<div class="live-failure-error">'+escLive(ev.error.substring(0,500))+'</div>' : '')
+        +'</div></div>'
+        +'<span class="live-failure-pending-label">View details after run completes</span>';
+      if (existing) {
+        // data-testid persists on the element — only innerHTML is replaced on retry updates
+        existing.innerHTML = html;
+      } else {
+        var item = document.createElement('div');
+        item.className = 'live-failure-item';
+        item.id = safeId;
+        item.dataset.testid = id;
+        item.innerHTML = html;
+        feed.insertBefore(item, feed.firstChild);
+      }
+    }
+
+    function waitForFinalReport() {
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Generating report...';
+      fetch(window.location.href, { cache: 'no-store', method: 'HEAD' })
+        .then(function() { return fetch(window.location.href, { cache: 'no-store' }); })
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+          if (html && html.indexOf('data-live-mode') === -1) {
+            window.location.reload();
+          } else {
+            setTimeout(waitForFinalReport, 1000);
+          }
+        })
+        .catch(function() { setTimeout(waitForFinalReport, 1000); });
+    }
+
+    function onLiveComplete(ev) {
+      liveCompleted = true;
+      liveTimerRunning = false;
+      var b = document.getElementById('live-status-badge');
+      if (b) b.classList.remove('running');
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Completed';
+      var nd = document.getElementById('live-nav-indicator');
+      if (nd) nd.classList.add('stopped');
+      if (ev.counters) updateLiveUI(ev.counters);
+      setRunButtonState(false);
+      if (isLiveMode) {
+        setTimeout(waitForFinalReport, 500);
+      }
+    }
+
+    function processLiveEvent(ev) {
+      if (ev.event === 'start') {
+        liveStartTime = Date.now();
+        liveTotalExpected = ev.totalExpected || 0;
+        document.getElementById('live-progress-label').textContent = '0 / '+liveTotalExpected+' tests';
+      } else if (ev.event === 'test') {
+        if (ev.counters) updateLiveUI(ev.counters);
+        if (ev.status === 'failed') {
+          addLiveFailure(ev);
+        } else if (ev.retry > 0) {
+          // Test passed on retry (flaky) — remove failure entry
+          var rid = 'live-fail-' + (ev.testId || ev.title || '').replace(/[^a-zA-Z0-9]/g, '_');
+          var rem = document.getElementById(rid);
+          if (rem) rem.remove();
+        }
+      } else if (ev.event === 'complete') {
+        onLiveComplete(ev);
+      }
+    }
+
+    function disconnectSse() {
+      if (liveEventSource) {
+        liveEventSource.close();
+        liveEventSource = null;
+      }
+      if (livePollTimer) {
+        clearInterval(livePollTimer);
+        livePollTimer = null;
+      }
+    }
+
+    function connectSse() {
+      disconnectSse();
+      liveIgnoreEvents = false;
+      var sseUrl = '__SSE_URL__';
+      var useSse = sseUrl !== '__' + 'SSE_URL__';
+      if (useSse) {
+        liveEventSource = new EventSource(sseUrl);
+        liveEventSource.onmessage = function(e) {
+          if (liveIgnoreEvents) return;
+          try { processLiveEvent(JSON.parse(e.data)); } catch(_) {}
+        };
+      } else {
+        var lastLineCount = 0;
+        function pollLive() {
+          if (liveIgnoreEvents) return;
+          fetch(liveJsonlFile, { cache: 'no-store' })
+            .then(function(r) { return r.text(); })
+            .then(function(text) {
+              var lines = text.trim().split('\\n');
+              for (var i = lastLineCount; i < lines.length; i++) {
+                try { processLiveEvent(JSON.parse(lines[i])); } catch(_) {}
+              }
+              lastLineCount = lines.length;
+            })
+            .catch(function() {});
+        }
+        livePollTimer = setInterval(pollLive, 2000);
+        pollLive();
+      }
+    }
+
+    // ---- Filter state ----
+    var selectedTags = {};
+    var selectedFiles = {};
+    var selectedSuites = {};
+
+    // Run Tests button — shown when served with --run-command
+    var runEnabled = '__RUN_ENABLED__';
+    var runIsEnabled = (runEnabled === 'true');
+    var liveGated = document.querySelector('.live-section-gated') !== null;
+    // Gating is cosmetic (CSS + JS) — actual run capability requires server-side
+    // license validation on the /run endpoint.
+    if (runIsEnabled && !liveGated) {
+      var runRow = document.getElementById('live-run-row');
+      if (runRow) runRow.classList.remove('live-run-row-hidden');
+    }
+
+    function initFilterPanel() {
+      // Populate tags
+      var tagSet = {};
+      var fileSet = {};
+      var suiteSet = {};
+      for (var i = 0; i < tests.length; i++) {
+        var t = tests[i];
+        if (t.tags) for (var j = 0; j < t.tags.length; j++) tagSet[t.tags[j]] = true;
+        if (t.file) fileSet[t.file] = true;
+        if (t.suites) for (var k = 0; k < t.suites.length; k++) suiteSet[t.suites[k]] = true;
+        if (t.suite && !suiteSet[t.suite]) suiteSet[t.suite] = true;
+      }
+
+      // Tags chips
+      var tagsContainer = document.getElementById('live-filter-tags-chips');
+      if (tagsContainer) {
+        var tagKeys = Object.keys(tagSet).sort();
+        if (tagKeys.length === 0) {
+          tagsContainer.innerHTML = '<span style="font-size:0.75rem;color:var(--text-secondary)">No tags found</span>';
+        } else {
+          tagsContainer.innerHTML = tagKeys.map(function(tag) {
+            return '<button class="live-filter-chip" data-tag="'+escLive(tag)+'" onclick="toggleFilterChip(this,\\'tags\\')">'+escLive(tag)+'</button>';
+          }).join('');
+        }
+      }
+
+      // Files list
+      var filesContainer = document.getElementById('live-filter-files-list');
+      if (filesContainer) {
+        var fileKeys = Object.keys(fileSet).sort();
+        filesContainer.innerHTML = fileKeys.map(function(f, idx) {
+          var short = f.length > 60 ? '...' + f.slice(-57) : f;
+          return '<div class="live-filter-file-item"><input type="checkbox" id="ff-'+idx+'" checked data-file="'+escLive(f)+'" onchange="toggleFileFilter(this)"><label for="ff-'+idx+'" title="'+escLive(f)+'">'+escLive(short)+'</label></div>';
+        }).join('');
+        // Init all files as selected
+        for (var fi = 0; fi < fileKeys.length; fi++) selectedFiles[fileKeys[fi]] = true;
+      }
+
+      // Suites list
+      var suitesContainer = document.getElementById('live-filter-suites-list');
+      if (suitesContainer) {
+        var suiteKeys = Object.keys(suiteSet).sort();
+        if (suiteKeys.length === 0) {
+          suitesContainer.innerHTML = '<span style="font-size:0.75rem;color:var(--text-secondary)">No suites found</span>';
+        } else {
+          suitesContainer.innerHTML = suiteKeys.map(function(s, idx) {
+            return '<div class="live-filter-file-item"><input type="checkbox" id="fs-'+idx+'" checked data-suite="'+escLive(s)+'" onchange="toggleSuiteFilter(this)"><label for="fs-'+idx+'">'+escLive(s)+'</label></div>';
+          }).join('');
+          for (var si = 0; si < suiteKeys.length; si++) selectedSuites[suiteKeys[si]] = true;
+        }
+      }
+
+      updateFilterSummary();
+    }
+
+    window.toggleFilterPanel = function() {
+      var panel = document.getElementById('live-filter-panel');
+      var toggle = document.getElementById('live-filter-toggle');
+      if (!panel) return;
+      var show = panel.style.display === 'none';
+      panel.style.display = show ? 'block' : 'none';
+      if (toggle) toggle.classList.toggle('active', show);
+    };
+
+    window.toggleFilterSection = function(section) {
+      var body = document.getElementById('live-filter-body-' + section);
+      var chevron = document.getElementById('live-filter-chevron-' + section);
+      if (!body) return;
+      var show = body.style.display === 'none';
+      body.style.display = show ? '' : 'none';
+      if (chevron) chevron.classList.toggle('collapsed', !show);
+    };
+
+    window.toggleFilterChip = function(el, type) {
+      el.classList.toggle('selected');
+      var key = el.getAttribute('data-tag');
+      if (el.classList.contains('selected')) {
+        selectedTags[key] = true;
+      } else {
+        delete selectedTags[key];
+      }
+      cascadeFilters();
+    };
+
+    window.toggleFileFilter = function(el) {
+      var file = el.getAttribute('data-file');
+      if (el.checked) { selectedFiles[file] = true; } else { delete selectedFiles[file]; }
+      updateFilterSummary();
+    };
+
+    window.toggleSuiteFilter = function(el) {
+      var suite = el.getAttribute('data-suite');
+      if (el.checked) { selectedSuites[suite] = true; } else { delete selectedSuites[suite]; }
+      updateFilterSummary();
+    };
+
+    window.selectAllFiles = function(select) {
+      var checkboxes = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]');
+      for (var i = 0; i < checkboxes.length; i++) {
+        checkboxes[i].checked = select;
+        var f = checkboxes[i].getAttribute('data-file');
+        if (select) { selectedFiles[f] = true; } else { delete selectedFiles[f]; }
+      }
+      updateFilterSummary();
+    };
+
+    window.clearAllFilters = function() {
+      selectedTags = {};
+      document.querySelectorAll('.live-filter-chip.selected').forEach(function(c) { c.classList.remove('selected'); });
+      var grep = document.getElementById('live-filter-grep');
+      if (grep) grep.value = '';
+      selectAllFiles(true);
+      var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+      for (var i = 0; i < suiteBoxes.length; i++) {
+        suiteBoxes[i].checked = true;
+        var s = suiteBoxes[i].getAttribute('data-suite');
+        selectedSuites[s] = true;
+      }
+      updateFilterSummary();
+    };
+
+    // When tags or grep change, auto-select only files/suites containing matching tests
+    window.cascadeFilters = function() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var hasPrimary = grep || activeTags.length > 0;
+
+      if (!hasPrimary) {
+        // No primary filters — restore all files and suites
+        selectAllFiles(true);
+        var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+        for (var i = 0; i < suiteBoxes.length; i++) {
+          suiteBoxes[i].checked = true;
+          selectedSuites[suiteBoxes[i].getAttribute('data-suite')] = true;
+        }
+        updateFilterSummary();
+        return;
+      }
+
+      // Find files and suites that contain tests matching primary filters (tags + grep)
+      var matchingFiles = {};
+      var matchingSuites = {};
+      for (var i = 0; i < tests.length; i++) {
+        var t = tests[i];
+        var matchesPrimary = true;
+        // Check tag match
+        if (activeTags.length > 0) {
+          var tagHit = false;
+          if (t.tags) {
+            for (var j = 0; j < activeTags.length; j++) {
+              if (t.tags.indexOf(activeTags[j]) !== -1) { tagHit = true; break; }
+            }
+          }
+          if (!tagHit) matchesPrimary = false;
+        }
+        // Check grep match
+        if (matchesPrimary && grep && t.title && t.title.toLowerCase().indexOf(grep.toLowerCase()) === -1) {
+          matchesPrimary = false;
+        }
+        if (matchesPrimary) {
+          if (t.file) matchingFiles[t.file] = true;
+          if (t.suites) { for (var k = 0; k < t.suites.length; k++) matchingSuites[t.suites[k]] = true; }
+          if (t.suite) matchingSuites[t.suite] = true;
+        }
+      }
+
+      // Update file checkboxes
+      selectedFiles = {};
+      var fileBoxes = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]');
+      for (var fi = 0; fi < fileBoxes.length; fi++) {
+        var f = fileBoxes[fi].getAttribute('data-file');
+        var match = !!matchingFiles[f];
+        fileBoxes[fi].checked = match;
+        if (match) selectedFiles[f] = true;
+      }
+
+      // Update suite checkboxes
+      selectedSuites = {};
+      var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+      for (var si = 0; si < suiteBoxes.length; si++) {
+        var s = suiteBoxes[si].getAttribute('data-suite');
+        var match = !!matchingSuites[s];
+        suiteBoxes[si].checked = match;
+        if (match) selectedSuites[s] = true;
+      }
+
+      updateFilterSummary();
+    };
+
+    window.updateFilterSummary = function() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var totalFiles = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]').length;
+      var checkedFiles = Object.keys(selectedFiles).length;
+      var totalSuites = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]').length;
+      var checkedSuites = Object.keys(selectedSuites).length;
+      var hasFilter = grep || activeTags.length > 0 || checkedFiles < totalFiles || checkedSuites < totalSuites;
+
+      // Count matching tests
+      var matching = 0;
+      for (var i = 0; i < tests.length; i++) {
+        if (testMatchesFilters(tests[i], grep, activeTags)) matching++;
+      }
+
+      var summary = document.getElementById('live-filter-summary');
+      if (summary) {
+        if (hasFilter) {
+          summary.textContent = matching + ' of ' + tests.length + ' tests selected';
+          summary.classList.remove('all-selected');
+        } else {
+          summary.textContent = 'All ' + tests.length + ' tests selected';
+          summary.classList.add('all-selected');
+        }
+      }
+      var clearBtn = document.getElementById('live-filter-clear');
+      if (clearBtn) clearBtn.style.display = hasFilter ? '' : 'none';
+
+      // Update section counts
+      var tc = document.getElementById('live-filter-tags-count');
+      if (tc) tc.textContent = activeTags.length > 0 ? activeTags.length : '';
+      var fc = document.getElementById('live-filter-files-count');
+      if (fc) fc.textContent = checkedFiles < totalFiles ? checkedFiles + '/' + totalFiles : '';
+      var sc = document.getElementById('live-filter-suites-count');
+      if (sc) sc.textContent = checkedSuites < totalSuites ? checkedSuites + '/' + totalSuites : '';
+    };
+
+    function testMatchesFilters(t, grep, activeTags) {
+      // File filter
+      if (t.file && !selectedFiles[t.file]) return false;
+      // Suite filter (AND: ALL of a test's suites must be selected)
+      if (t.suites && t.suites.length > 0) {
+        for (var i = 0; i < t.suites.length; i++) {
+          if (!selectedSuites[t.suites[i]]) return false;
+        }
+      } else if (t.suite && !selectedSuites[t.suite]) {
+        return false;
+      }
+      // Tag filter (OR: test must have at least one selected tag)
+      if (activeTags.length > 0) {
+        var tagMatch = false;
+        if (t.tags) {
+          for (var j = 0; j < activeTags.length; j++) {
+            if (t.tags.indexOf(activeTags[j]) !== -1) { tagMatch = true; break; }
+          }
+        }
+        if (!tagMatch) return false;
+      }
+      // Grep filter
+      if (grep && t.title && t.title.toLowerCase().indexOf(grep.toLowerCase()) === -1) return false;
+      return true;
+    }
+
+    function buildFilterPayload() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var totalFiles = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]').length;
+      var checkedFiles = Object.keys(selectedFiles);
+      var totalSuites = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]').length;
+      var checkedSuites = Object.keys(selectedSuites);
+
+      var payload = {};
+      // Only include files if not all are selected
+      if (checkedFiles.length < totalFiles && checkedFiles.length > 0) {
+        payload.files = checkedFiles;
+      }
+      // Build grep from tags + grep input
+      var grepParts = [];
+      if (activeTags.length > 0) {
+        grepParts.push(activeTags.join('|'));
+      }
+      if (grep) {
+        grepParts.push(grep);
+      }
+      if (grepParts.length > 0) {
+        payload.grep = grepParts.join('.*');
+      }
+      return payload;
+    }
+
+    function setRunButtonState(running) {
+      if (liveGated) return;
+      var btn = document.getElementById('live-run-btn');
+      var cancelBtn = document.getElementById('live-cancel-btn');
+      if (btn) btn.disabled = running;
+      if (cancelBtn) cancelBtn.style.display = running ? 'inline-block' : 'none';
+    }
+
+    function resetLiveUI() {
+      var ids = ['passed','failed','flaky','skipped'];
+      for (var i = 0; i < ids.length; i++) {
+        var cv = document.getElementById('live-counter-' + ids[i]);
+        if (cv) cv.textContent = '0';
+        var seg = document.getElementById('live-seg-' + ids[i]);
+        if (seg) seg.style.width = '0%';
+      }
+      var pl = document.getElementById('live-progress-label');
+      if (pl) pl.textContent = '0 / 0 tests';
+      var ff = document.getElementById('live-failure-feed');
+      if (ff) ff.innerHTML = '';
+      var elapsed = document.getElementById('live-elapsed');
+      if (elapsed) elapsed.textContent = '0s';
+    }
+
+    window.runTests = function() {
+      var btn = document.getElementById('live-run-btn');
+      if (!btn || btn.disabled) return;
+      setRunButtonState(true);
+      btn.textContent = 'Starting\u2026';
+
+      resetLiveUI();
+
+      liveCompleted = false;
+      liveTimerRunning = false;
+      liveTotalExpected = 0;
+
+      var b = document.getElementById('live-status-badge');
+      if (b) b.classList.add('running');
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Starting';
+      var nd = document.getElementById('live-nav-indicator');
+      if (nd) nd.classList.remove('stopped');
+
+      switchView('live');
+
+      var filterPayload = buildFilterPayload();
+      fetch('/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filterPayload)
+      })
+        .then(function(r) {
+          if (r.status === 409) {
+            setRunButtonState(false);
+            btn.textContent = 'Run Tests';
+            alert('A test run is already in progress');
+            return;
+          }
+          if (!r.ok) {
+            setRunButtonState(false);
+            btn.textContent = 'Run Tests';
+            alert('Failed to start tests (HTTP ' + r.status + ')');
+            return;
+          }
+          // Server accepted — now connect SSE to receive events
+          btn.textContent = 'Run Tests';
+          var stAfter = document.getElementById('live-status-text');
+          if (stAfter) stAfter.textContent = 'Running';
+          liveStartTime = Date.now();
+          liveTimerRunning = true;
+          tickLiveElapsed();
+          connectSse();
+        })
+        .catch(function() {
+          setRunButtonState(false);
+          btn.textContent = 'Run Tests';
+          alert('Failed to reach the server');
+        });
+    };
+
+    window.cancelTests = function() {
+      var cancelBtn = document.getElementById('live-cancel-btn');
+      if (cancelBtn) cancelBtn.disabled = true;
+      fetch('/run', { method: 'DELETE' })
+        .then(function(r) {
+          if (cancelBtn) cancelBtn.disabled = false;
+          if (r.ok) {
+            liveIgnoreEvents = true;
+            disconnectSse();
+            liveTimerRunning = false;
+            var st = document.getElementById('live-status-text');
+            if (st) st.textContent = 'Cancelled';
+            var b = document.getElementById('live-status-badge');
+            if (b) b.classList.remove('running');
+            var nd = document.getElementById('live-nav-indicator');
+            if (nd) nd.classList.add('stopped');
+            setRunButtonState(false);
+          } else {
+            r.json().then(function(j) { if (j.error) alert(j.error); }).catch(function() {});
+          }
+        })
+        .catch(function() {
+          if (cancelBtn) cancelBtn.disabled = false;
+          alert('Failed to reach the server');
+        });
+    };
+
+    // Initialize filter panel after all functions are defined
+    if (runIsEnabled) initFilterPanel();
+
+    // Auto-start: only when report is in live mode (during initial generation)
+    if (!isLiveMode) return;
+
+    switchView('live');
+
+    // Check actual server state before assuming "Running"
+    if (runIsEnabled) {
+      fetch('/run')
+        .then(function(r) { return r.json(); })
+        .then(function(state) {
+          if (state.running) {
+            var badge = document.getElementById('live-status-badge');
+            if (badge) badge.classList.add('running');
+            var statusText = document.getElementById('live-status-text');
+            if (statusText) statusText.textContent = 'Running';
+            liveTimerRunning = true;
+            liveStartTime = Date.now();
+            tickLiveElapsed();
+            setRunButtonState(true);
+            connectSse();
+          } else {
+            // Tests not running — show idle state with last exit code
+            var badge = document.getElementById('live-status-badge');
+            if (badge) badge.classList.remove('running');
+            var statusText = document.getElementById('live-status-text');
+            if (state.lastExitCode === 0) {
+              if (statusText) statusText.textContent = 'Completed';
+            } else if (state.lastExitCode === -1) {
+              if (statusText) statusText.textContent = 'Cancelled';
+            } else if (state.lastExitCode !== null) {
+              if (statusText) statusText.textContent = 'Failed (exit ' + state.lastExitCode + ')';
+            } else {
+              if (statusText) statusText.textContent = 'Idle';
+            }
+            var nd = document.getElementById('live-nav-indicator');
+            if (nd) nd.classList.add('stopped');
+            setRunButtonState(false);
+            connectSse();
+          }
+        })
+        .catch(function() {
+          // Can't reach server — fall back to SSE/polling
+          var badge = document.getElementById('live-status-badge');
+          if (badge) badge.classList.add('running');
+          var statusText = document.getElementById('live-status-text');
+          if (statusText) statusText.textContent = 'Running';
+          liveTimerRunning = true;
+          liveStartTime = Date.now();
+          tickLiveElapsed();
+          connectSse();
+        });
+    } else {
+      // No run endpoint available — just connect SSE for live display
+      var badge = document.getElementById('live-status-badge');
+      if (badge) badge.classList.add('running');
+      var statusText = document.getElementById('live-status-text');
+      if (statusText) statusText.textContent = 'Running';
+      liveTimerRunning = true;
+      liveStartTime = Date.now();
+      tickLiveElapsed();
+      connectSse();
+    }
+  })();
+  </script>
+` : ''}
 ${branding?.footer || !branding?.hidePoweredBy ? `  <footer class="report-footer" style="text-align:center;padding:12px 16px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border-subtle);">
 ${branding?.footer ? `    <div>${escapeHtml(branding.footer)}</div>` : ''}
 ${!branding?.hidePoweredBy ? '    <div>Powered by <a href="https://github.com/gary-parker/playwright-smart-reporter" style="color:var(--accent-blue);text-decoration:none;">Smart Reporter</a></div>' : ''}
@@ -1636,6 +2376,7 @@ ${highContrastOverride}${customOverrides}
       justify-content: space-between;
       padding: 0 1rem;
       background: var(--bg-secondary);
+      position: relative;
       border-bottom: 1px solid var(--border-subtle);
       z-index: 100;
     }
@@ -2227,6 +2968,236 @@ ${highContrastOverride}${customOverrides}
     }
 
     /* ============================================
+       LIVE VIEW
+    ============================================ */
+    .live-nav-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent-green);
+      animation: livePulse 1.5s ease-in-out infinite;
+      margin-left: auto;
+    }
+    .live-nav-dot.stopped { animation: none; opacity: 0.3; }
+    @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .view-header { display: flex; align-items: center; gap: 0.75rem; }
+    .live-header-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em; padding: 4px 10px; border-radius: 6px;
+      background: rgba(34,197,94,0.12); color: var(--accent-green);
+      border: 1px solid rgba(34,197,94,0.25);
+    }
+    .live-header-badge.running {
+      background: rgba(239,68,68,0.12); color: var(--accent-red);
+      border-color: rgba(239,68,68,0.25);
+    }
+    .live-header-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent-green);
+    }
+    .live-header-badge.running .live-header-dot {
+      background: var(--accent-red);
+      animation: livePulse 1.5s ease-in-out infinite;
+    }
+
+    .live-run-row {
+      padding: 0.75rem 1.5rem; display: flex; align-items: center;
+    }
+    .live-run-btn {
+      padding: 0.5rem 1.25rem; border: none; border-radius: 6px;
+      background: var(--accent-green); color: #fff; font-weight: 600;
+      font-size: 0.85rem; cursor: pointer; transition: opacity 0.2s;
+    }
+    .live-run-btn:hover { opacity: 0.85; }
+    .live-run-btn:disabled {
+      opacity: 0.5; cursor: not-allowed;
+    }
+    .live-run-btn:disabled::before {
+      content: ''; display: inline-block; width: 12px; height: 12px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      margin-right: 6px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .live-cancel-btn {
+      padding: 0.5rem 1.25rem; border: none; border-radius: 6px;
+      background: var(--accent-red); color: #fff; font-weight: 600;
+      font-size: 0.85rem; cursor: pointer; transition: opacity 0.2s;
+      margin-left: 0.5rem;
+    }
+    .live-cancel-btn:hover { opacity: 0.85; }
+
+    .live-filter-summary {
+      font-size: 0.8rem; color: var(--accent-yellow); margin-left: 0.5rem;
+      font-weight: 500; white-space: nowrap;
+    }
+    .live-filter-summary.all-selected {
+      color: var(--text-secondary);
+    }
+    .live-filter-toggle {
+      margin-left: auto; padding: 0.4rem 0.75rem; border: 1px solid var(--border-subtle);
+      border-radius: 6px; background: none; color: var(--text-secondary);
+      font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .live-filter-toggle:hover { border-color: var(--text-primary); color: var(--text-primary); }
+    .live-filter-toggle.active { border-color: var(--accent-green); color: var(--accent-green); }
+
+    .live-filter-panel {
+      border-top: 1px solid var(--border-subtle); padding: 1rem 1.5rem;
+      margin-top: 0.25rem;
+      background: var(--bg-card); max-height: 300px; overflow-y: auto;
+    }
+    .live-filter-section {
+      margin-bottom: 0.5rem;
+    }
+    .live-filter-section-header {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+      cursor: pointer; padding: 0.35rem 0; user-select: none;
+    }
+    .live-filter-section-header:hover { color: var(--text-primary); }
+    .live-filter-chevron { margin-left: auto; display: flex; transition: transform 0.2s; }
+    .live-filter-chevron.collapsed { transform: rotate(-90deg); }
+    .live-filter-count {
+      font-size: 0.7rem; background: var(--accent-green); color: #fff;
+      border-radius: 10px; padding: 0 6px; font-weight: 700; min-width: 18px;
+      text-align: center; line-height: 1.4;
+    }
+    .live-filter-count:empty { display: none; }
+    .live-filter-section-body { padding: 0.25rem 0 0.5rem; }
+
+    .live-filter-grep-input {
+      width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--border-subtle);
+      border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);
+      font-size: 0.8rem; font-family: inherit; outline: none;
+    }
+    .live-filter-grep-input:focus { border-color: var(--accent-green); }
+
+    .live-filter-chips {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .live-filter-chip {
+      padding: 0.25rem 0.6rem; border: 1px solid var(--border-subtle);
+      border-radius: 14px; font-size: 0.75rem; cursor: pointer;
+      color: var(--text-secondary); background: none;
+      transition: all 0.15s; user-select: none;
+    }
+    .live-filter-chip:hover { border-color: var(--text-primary); color: var(--text-primary); }
+    .live-filter-chip.selected {
+      background: var(--accent-green); border-color: var(--accent-green);
+      color: #fff; font-weight: 600;
+    }
+
+    .live-filter-file-actions {
+      display: flex; gap: 6px; margin-bottom: 6px;
+    }
+    .live-filter-action-btn {
+      padding: 0.2rem 0.5rem; border: 1px solid var(--border-subtle);
+      border-radius: 4px; font-size: 0.7rem; cursor: pointer;
+      background: none; color: var(--text-secondary);
+    }
+    .live-filter-action-btn:hover { color: var(--text-primary); border-color: var(--text-primary); }
+
+    .live-filter-file-list {
+      display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto;
+    }
+    .live-filter-file-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; color: var(--text-secondary); padding: 0.2rem 0;
+      cursor: pointer; user-select: none;
+    }
+    .live-filter-file-item:hover { color: var(--text-primary); }
+    .live-filter-file-item input[type="checkbox"] {
+      accent-color: var(--accent-green); margin: 0;
+    }
+    .live-filter-file-item label { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .live-filter-bar-actions { padding-top: 0.25rem; }
+    .live-filter-clear-btn {
+      padding: 0.3rem 0.75rem; border: none; border-radius: 6px;
+      background: rgba(239,68,68,0.15); color: var(--accent-red);
+      font-size: 0.75rem; font-weight: 600; cursor: pointer;
+    }
+    .live-filter-clear-btn:hover { background: rgba(239,68,68,0.25); }
+
+    .live-content { padding: 1.5rem; }
+    .live-elapsed-row {
+      display: flex; align-items: center; gap: 0.75rem;
+      margin-bottom: 1rem; font-size: 0.875rem;
+    }
+    .live-elapsed-label { color: var(--text-muted); }
+    .live-elapsed-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+    .live-progress-track {
+      background: var(--bg-card); border-radius: 8px;
+      height: 24px; overflow: hidden; display: flex;
+      margin-bottom: 0.5rem;
+    }
+    .live-seg { height: 100%; transition: width 0.3s ease; }
+    .live-seg-passed { background: var(--accent-green); }
+    .live-seg-failed { background: var(--accent-red); }
+    .live-seg-flaky { background: var(--accent-yellow); }
+    .live-seg-skipped { background: var(--accent-slate, #64748b); }
+    .live-progress-label {
+      text-align: center; font-size: 0.8rem;
+      color: var(--text-muted); margin-bottom: 1.5rem;
+    }
+
+    .live-counters {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1rem; margin-bottom: 2rem;
+    }
+    .live-counter-card {
+      background: var(--bg-card); border-radius: 8px;
+      padding: 1rem; text-align: center;
+    }
+    .live-counter-value { font-size: 2rem; font-weight: 700; }
+    .live-counter-label {
+      font-size: 0.7rem; color: var(--text-muted);
+      text-transform: uppercase; margin-top: 4px; letter-spacing: 0.05em;
+    }
+    .live-c-passed .live-counter-value { color: var(--accent-green); }
+    .live-c-failed .live-counter-value { color: var(--accent-red); }
+    .live-c-flaky .live-counter-value { color: var(--accent-yellow); }
+    .live-c-skipped .live-counter-value { color: var(--accent-slate, #64748b); }
+
+    .live-failure-section h3 { font-size: 1rem; margin-bottom: 0.75rem; }
+    .live-failure-item {
+      background: var(--bg-card); border-left: 4px solid var(--accent-red);
+      border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 0.5rem;
+    }
+    .live-failure-title { font-weight: 600; font-size: 0.875rem; }
+    .live-failure-file { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+    .live-failure-error {
+      font-size: 0.8rem; color: var(--accent-red); margin-top: 6px;
+      font-family: ${monoFont}; white-space: pre-wrap;
+      max-height: 80px; overflow: hidden;
+    }
+    .live-failure-clickable { cursor: pointer; transition: background 0.15s; }
+    .live-failure-clickable:hover { background: var(--bg-hover, rgba(128,128,128,0.1)); }
+    .live-failure-item-main { display: flex; gap: 0.75rem; align-items: flex-start; }
+    .live-failure-item-text { flex: 1; min-width: 0; }
+    .live-failure-thumb {
+      width: 64px; height: 48px; object-fit: cover; border-radius: 4px;
+      border: 1px solid var(--border-subtle); flex-shrink: 0;
+    }
+    .live-failure-view-link {
+      display: block; margin-top: 6px; font-size: 0.75rem;
+      color: var(--accent-blue); font-weight: 500;
+    }
+    .live-failure-pending-label {
+      display: block; margin-top: 6px; font-size: 0.7rem;
+      color: var(--text-muted); font-style: italic;
+    }
+    .live-run-row-hidden { display: none; }
+    .live-section-gated {
+      opacity: 0.4 !important; pointer-events: none; filter: grayscale(0.6);
+      user-select: none; animation: none !important;
+    }
+    .live-section-gated .live-run-row { display: flex; }
+
+    /* ============================================
        OVERVIEW VIEW
     ============================================ */
     .overview-content {
@@ -2318,12 +3289,6 @@ ${highContrastOverride}${customOverrides}
       border: 1px solid var(--border-subtle);
       border-radius: 16px;
       padding: 1.25rem;
-      transition: all 0.2s;
-    }
-
-    .hero-stat-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
     }
 
     .hero-stat-card.health {
@@ -2704,12 +3669,6 @@ ${highContrastOverride}${customOverrides}
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
       cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .insight-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
     }
 
     .insight-icon {
@@ -6353,6 +7312,164 @@ ${highContrastOverride}${customOverrides}
     }
 
     /* ============================================
+       DESIGN ENHANCEMENTS
+    ============================================ */
+
+    /* 1. Animated counter shimmer on hero stat values */
+    .hero-stat-value[data-target] {
+      display: inline-block;
+    }
+
+    /* 2. Staggered test list entrance (initial load only via .animate-entrance) */
+    @keyframes listItemIn {
+      from { opacity: 0; transform: translateX(-12px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .test-list-item.animate-entrance {
+      animation: listItemIn 0.3s ease both;
+    }
+    .test-list-item.animate-entrance:nth-child(1) { animation-delay: 0s; }
+    .test-list-item.animate-entrance:nth-child(2) { animation-delay: 0.03s; }
+    .test-list-item.animate-entrance:nth-child(3) { animation-delay: 0.06s; }
+    .test-list-item.animate-entrance:nth-child(4) { animation-delay: 0.09s; }
+    .test-list-item.animate-entrance:nth-child(5) { animation-delay: 0.12s; }
+    .test-list-item.animate-entrance:nth-child(6) { animation-delay: 0.15s; }
+    .test-list-item.animate-entrance:nth-child(7) { animation-delay: 0.18s; }
+    .test-list-item.animate-entrance:nth-child(8) { animation-delay: 0.21s; }
+    .test-list-item.animate-entrance:nth-child(9) { animation-delay: 0.24s; }
+    .test-list-item.animate-entrance:nth-child(10) { animation-delay: 0.27s; }
+    .test-list-item.animate-entrance:nth-child(n+11) { animation-delay: 0.3s; }
+
+    /* 3. Glassmorphism hero cards */
+    .hero-stat-card {
+      background: linear-gradient(135deg, rgba(26, 26, 36, 0.7), rgba(26, 26, 36, 0.4));
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]):not([data-theme="dracula"]):not([data-theme="cyberpunk"]) .hero-stat-card {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+      }
+    }
+    :root[data-theme="light"] .hero-stat-card {
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+
+    /* 4. Gradient accent bar on topbar */
+    .top-bar::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent-green), var(--accent-blue), var(--accent-purple));
+      opacity: 0.6;
+    }
+
+    /* 5. Enhanced hover interactions */
+    .hero-stat-card:hover {
+      transform: translateY(-4px) scale(1.01);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+    .hero-stat-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+
+    .insight-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .insight-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    /* 6. Progress ring animation on scroll */
+    @keyframes ringFill {
+      from { stroke-dasharray: 0 264; }
+    }
+    .progress-ring-fill.animate {
+      animation: ringFill 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+    .health-ring-fill.animate {
+      animation: ringFill 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    /* 7. Smooth view transitions (crossfade) */
+    .view-panel {
+      animation: viewFadeIn 0.25s ease;
+    }
+    @keyframes viewFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 8. Status-aware header accent */
+    .top-bar.status-all-pass::after {
+      background: linear-gradient(90deg, var(--accent-green), var(--accent-green), transparent);
+      opacity: 0.8;
+    }
+    .top-bar.status-has-failures::after {
+      background: linear-gradient(90deg, var(--accent-red), var(--accent-orange), transparent);
+      opacity: 0.8;
+    }
+    .top-bar.status-has-flaky::after {
+      background: linear-gradient(90deg, var(--accent-yellow), var(--accent-green), transparent);
+      opacity: 0.6;
+    }
+
+    /* 9. Micro-interactions */
+    @keyframes badgeBounce {
+      0% { transform: scale(0); opacity: 0; }
+      60% { transform: scale(1.15); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .test-item-badge {
+      animation: badgeBounce 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+
+    @keyframes countUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .hero-stat-value {
+      animation: countUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+      animation-delay: 0.2s;
+    }
+
+    .mini-bar {
+      animation: barGrow 0.8s cubic-bezier(0.4, 0, 0.2, 1) both;
+      animation-delay: 0.3s;
+    }
+    @keyframes barGrow {
+      from { width: 0; }
+    }
+
+    /* Hero stats stagger */
+    .hero-stat-card:nth-child(1) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0s; }
+    .hero-stat-card:nth-child(2) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.1s; }
+    .hero-stat-card:nth-child(3) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.2s; }
+    .hero-stat-card:nth-child(4) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.3s; }
+    @keyframes heroCardIn {
+      from { opacity: 0; transform: translateY(16px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* Reduce motion for accessibility */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-delay: 0s !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* ============================================
        PRINT STYLESHEET
     ============================================ */
     @media print {
@@ -6966,10 +8083,13 @@ function generateScripts(
         panel.style.display = 'none';
       });
 
-      // Show selected view
+      // Show selected view with fade-in
       const viewPanel = document.getElementById('view-' + view);
       if (viewPanel) {
         viewPanel.style.display = 'block';
+        viewPanel.style.animation = 'none';
+        viewPanel.offsetHeight; // force reflow
+        viewPanel.style.animation = '';
       }
 
       // Update breadcrumb
@@ -8202,7 +9322,7 @@ function generateScripts(
 	    }
 
     // Run on page load
-    window.addEventListener('DOMContentLoaded', () => {
+    function onReady() {
       scrollChartsToRight();
       initHistoryDrilldown();
       if (!traceViewerEnabled) {
@@ -8210,7 +9330,76 @@ function generateScripts(
           el.style.display = 'none';
         });
       }
-    });
+      initDesignEnhancements();
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', onReady);
+    } else {
+      onReady();
+    }
+
+    /* ============================================
+       DESIGN ENHANCEMENTS (JS)
+    ============================================ */
+    function initDesignEnhancements() {
+      animateCounters();
+      animateProgressRings();
+      setStatusAccent();
+      // Apply staggered entrance once — class is never re-added so tab switches don't replay
+      document.querySelectorAll('.test-list-item').forEach(function(el) {
+        el.classList.add('animate-entrance');
+      });
+    }
+
+    // 1. Animated counters — hero stat values count up
+    function animateCounters() {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      document.querySelectorAll('.hero-stat-value').forEach(function(el) {
+        var text = el.textContent || '';
+        // Match numbers like "95.2%" or "1.3s" or "28"
+        var match = text.match(/^([\\d.]+)(.*)/);
+        if (!match) return;
+        var target = parseFloat(match[1]);
+        var suffix = match[2];
+        if (isNaN(target) || target === 0) return;
+        var isFloat = match[1].includes('.');
+        var decimals = isFloat ? (match[1].split('.')[1] || '').length : 0;
+        var startTime = null;
+        var duration = 800;
+        el.textContent = '0' + suffix;
+        requestAnimationFrame(function step(ts) {
+          if (!startTime) startTime = ts;
+          var progress = Math.min((ts - startTime) / duration, 1);
+          // Ease out cubic
+          var eased = 1 - Math.pow(1 - progress, 3);
+          var current = eased * target;
+          el.textContent = (isFloat ? current.toFixed(decimals) : Math.round(current)) + suffix;
+          if (progress < 1) requestAnimationFrame(step);
+        });
+      });
+    }
+
+    // 6. Progress ring animation on load
+    function animateProgressRings() {
+      document.querySelectorAll('.progress-ring-fill, .health-ring-fill').forEach(function(el) {
+        el.classList.add('animate');
+      });
+    }
+
+    // 8. Status-aware header accent
+    function setStatusAccent() {
+      var topBar = document.querySelector('.top-bar');
+      if (!topBar) return;
+      var failedCount = document.querySelectorAll('#view-tests .status-dot.failed').length;
+      var flakyCount = document.querySelectorAll('#view-tests .test-item-badge.flaky').length;
+      if (failedCount > 0) {
+        topBar.classList.add('status-has-failures');
+      } else if (flakyCount > 0) {
+        topBar.classList.add('status-has-flaky');
+      } else {
+        topBar.classList.add('status-all-pass');
+      }
+    }
 
 ${includeGallery ? `    // Gallery functions\n${generateGalleryScript()}` : ''}
 

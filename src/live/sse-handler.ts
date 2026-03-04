@@ -18,6 +18,7 @@ export function buildSseHandler(jsonlPath: string): SseHandler {
   let lastOffset = 0;
   let watcher: fs.FSWatcher | null = null;
   let dirWatcher: fs.FSWatcher | null = null;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   if (fs.existsSync(jsonlPath)) {
     lastOffset = fs.statSync(jsonlPath).size;
@@ -30,6 +31,10 @@ export function buildSseHandler(jsonlPath: string): SseHandler {
     try {
       const fd = fs.openSync(jsonlPath, 'r');
       const stat = fs.fstatSync(fd);
+      if (stat.size < lastOffset) {
+        // File was truncated/recreated (e.g. new test run) — reset
+        lastOffset = 0;
+      }
       if (stat.size <= lastOffset) {
         fs.closeSync(fd);
         return;
@@ -59,7 +64,21 @@ export function buildSseHandler(jsonlPath: string): SseHandler {
   function startFileWatcher(): void {
     if (watcher) return;
     try {
-      watcher = fs.watch(jsonlPath, () => {
+      watcher = fs.watch(jsonlPath, (event) => {
+        if (event === 'rename') {
+          // File was replaced — restart watcher
+          watcher?.close();
+          watcher = null;
+          lastOffset = 0;
+          if (fs.existsSync(jsonlPath)) {
+            startFileWatcher();
+            broadcastNewLines();
+          } else {
+            // File deleted, watch directory for recreation
+            startDirWatcher();
+          }
+          return;
+        }
         broadcastNewLines();
       });
     } catch {
@@ -67,26 +86,46 @@ export function buildSseHandler(jsonlPath: string): SseHandler {
     }
   }
 
-  // Watch the file if it exists, otherwise watch the parent directory for creation
-  if (fs.existsSync(jsonlPath)) {
-    startFileWatcher();
-  } else {
+  function startDirWatcher(): void {
+    if (dirWatcher) return;
     const dir = path.dirname(jsonlPath);
     const base = path.basename(jsonlPath);
     try {
       dirWatcher = fs.watch(dir, (_event, filename) => {
         if (filename === base && fs.existsSync(jsonlPath) && !watcher) {
+          lastOffset = 0;
           startFileWatcher();
           if (dirWatcher) {
             dirWatcher.close();
             dirWatcher = null;
           }
+          broadcastNewLines();
         }
       });
     } catch {
-      // Parent dir doesn't exist yet — rare edge case
+      // Parent dir doesn't exist yet
     }
   }
+
+  // Watch the file if it exists, otherwise watch the parent directory for creation
+  if (fs.existsSync(jsonlPath)) {
+    startFileWatcher();
+  } else {
+    startDirWatcher();
+  }
+
+  // Polling fallback: fs.watch is unreliable on macOS for file creation in large dirs.
+  // Poll every 500ms to catch new data regardless of watcher state.
+  // Skip polling when no clients are connected to avoid unnecessary I/O.
+  pollInterval = setInterval(() => {
+    if (clients.size === 0) return;
+    if (!fs.existsSync(jsonlPath)) return;
+    if (!watcher) {
+      lastOffset = 0;
+      startFileWatcher();
+    }
+    broadcastNewLines();
+  }, 500);
 
   return {
     addClient(client: SseClient) {
@@ -117,6 +156,10 @@ export function buildSseHandler(jsonlPath: string): SseHandler {
       if (dirWatcher) {
         dirWatcher.close();
         dirWatcher = null;
+      }
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
       }
       clients.clear();
     },

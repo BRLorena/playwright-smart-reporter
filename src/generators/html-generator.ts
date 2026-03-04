@@ -875,7 +875,11 @@ export function generateHtml(data: HtmlGeneratorData): GeneratedReport {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Test Report</title>${cspSafe ? '' : fontLinks}
+  <title>${escapeHtml(reportTitle)} — Smart Test Report</title>
+  <meta name="description" content="Interactive Playwright test report with stability grades, flakiness detection, trend analytics, and AI-powered failure analysis.">
+  <meta property="og:title" content="${escapeHtml(reportTitle)} — Smart Test Report">
+  <meta property="og:description" content="Interactive Playwright test report with stability grades, flakiness detection, trend analytics, and AI-powered failure analysis.">
+  <meta property="og:type" content="website">${cspSafe ? '' : fontLinks}
 ${headStyles}
 </head>
 <body>

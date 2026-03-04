@@ -895,9 +895,10 @@ ${options.exportJunit ? `            <a class="export-menu-item" href="${outputB
             <button class="theme-menu-item" onclick="setTheme('dark')" role="menuitem" data-theme="dark">
               <span>${icon('moon')}</span> Dark
             </button>
-${hasPro ? `            <div style="height:1px;background:var(--border-subtle);margin:4px 0;position:relative;">
-              <span style="position:absolute;right:4px;top:-8px;font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">PRO</span>
+            <div style="height:1px;background:var(--border-subtle);margin:4px 0;position:relative;">
+              <span style="position:absolute;right:4px;top:-8px;font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
             </div>
+${!hasPro ? `            <div style="opacity:0.4;pointer-events:none;">` : ''}
             <button class="theme-menu-item" onclick="setTheme('ocean')" role="menuitem" data-theme="ocean">
               <span>${icon('waves')}</span> Ocean
             </button>
@@ -915,7 +916,8 @@ ${hasPro ? `            <div style="height:1px;background:var(--border-subtle);m
             </button>
             <button class="theme-menu-item" onclick="setTheme('rose')" role="menuitem" data-theme="rose">
               <span>${icon('flower-2')}</span> Rose
-            </button>` : ''}
+            </button>
+${!hasPro ? `            </div>` : ''}
           </div>
         </div>
         <div class="timestamp">${new Date().toLocaleString()}</div>
@@ -1003,7 +1005,7 @@ ${hasPro ? `            <div style="height:1px;background:var(--border-subtle);m
           <button class="nav-item" data-view="live" onclick="switchView('live')" role="tab" aria-selected="false" aria-controls="view-live">
             <span class="nav-icon" aria-hidden="true">${icon('radio')}</span>
             <span class="nav-label">Live</span>
-            ${!hasStarter ? `<span class="premium-badge" style="font-size:8px;background:var(--accent-blue);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>` : ''}
+            ${!hasStarter ? `<span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>` : ''}
             <span class="live-nav-dot" id="live-nav-indicator"></span>
           </button>
           ` : ''}

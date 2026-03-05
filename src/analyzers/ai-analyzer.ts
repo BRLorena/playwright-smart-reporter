@@ -1,17 +1,46 @@
-import type { TestResultData, TestRecommendation, FailureCluster, SuiteStats } from '../types';
+import type { TestResultData, TestRecommendation, FailureCluster, SuiteStats, SmartReporterOptions } from '../types';
+
+/** Supported AI provider identifiers */
+export type AIProvider = 'anthropic' | 'openai' | 'gemini' | 'copilot' | 'ollama';
+
+/** Options forwarded from SmartReporterOptions that are relevant to the AI layer */
+export interface AIAnalyzerOptions {
+  aiProvider?: AIProvider;
+  ollamaBaseUrl?: string;
+  ollamaModel?: string;
+  copilotModel?: string;
+}
 
 /**
- * AI-powered analysis for test failures and recommendations
+ * AI-powered analysis for test failures and recommendations.
+ *
+ * Supported providers (in default priority order):
+ *   Anthropic  – ANTHROPIC_API_KEY
+ *   OpenAI     – OPENAI_API_KEY
+ *   Gemini     – GEMINI_API_KEY
+ *   Copilot    – GITHUB_TOKEN  (GitHub Models API)
+ *   Ollama     – local server  (no key required)
  */
 export class AIAnalyzer {
   private anthropicKey?: string;
   private openaiKey?: string;
   private geminiKey?: string;
+  private githubToken?: string;
+  private ollamaBaseUrl: string;
+  private ollamaModel: string;
+  private copilotModel: string;
+  private explicitProvider?: AIProvider;
 
-  constructor() {
+  constructor(options: AIAnalyzerOptions = {}) {
     this.anthropicKey = process.env.ANTHROPIC_API_KEY;
     this.openaiKey = process.env.OPENAI_API_KEY;
     this.geminiKey = process.env.GEMINI_API_KEY;
+    this.githubToken = process.env.GITHUB_TOKEN;
+
+    this.explicitProvider = options.aiProvider;
+    this.ollamaBaseUrl = options.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+    this.ollamaModel = options.ollamaModel ?? process.env.OLLAMA_MODEL ?? 'codellama';
+    this.copilotModel = options.copilotModel ?? process.env.COPILOT_MODEL ?? 'claude-sonnet-4-20250514';
   }
 
   /**
@@ -24,8 +53,8 @@ export class AIAnalyzer {
 
     if (failedTests.length === 0) return;
 
-    if (!this.anthropicKey && !this.openaiKey && !this.geminiKey) {
-      console.log('💡 Tip: Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY for AI failure analysis');
+    if (!this.isAvailable()) {
+      console.log('💡 Tip: Set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or GITHUB_TOKEN for AI failure analysis. You can also use a local Ollama instance.');
       return;
     }
 
@@ -59,7 +88,7 @@ export class AIAnalyzer {
    */
   async analyzeClusters(clusters: FailureCluster[]): Promise<void> {
     if (clusters.length === 0) return;
-    if (!this.anthropicKey && !this.openaiKey && !this.geminiKey) return;
+    if (!this.isAvailable()) return;
 
     console.log(`\n🤖 Analyzing ${clusters.length} failure cluster(s) with AI...`);
 
@@ -185,17 +214,36 @@ Provide a brief, actionable suggestion to fix these failures.`;
   }
 
   /**
-   * Call AI API (Anthropic, OpenAI, or Gemini)
+   * Call AI API — dispatches to the appropriate provider.
+   *
+   * If `aiProvider` was set explicitly in the config, only that provider is tried.
+   * Otherwise the priority is: Anthropic > OpenAI > Gemini > Copilot > Ollama.
    */
   private async callAI(prompt: string): Promise<string> {
+    // Explicit provider selection
+    if (this.explicitProvider) {
+      switch (this.explicitProvider) {
+        case 'anthropic': return this.callAnthropic(prompt);
+        case 'openai':    return this.callOpenAI(prompt);
+        case 'gemini':    return this.callGemini(prompt);
+        case 'copilot':   return this.callCopilot(prompt);
+        case 'ollama':    return this.callOllama(prompt);
+      }
+    }
+
+    // Auto-detect by available credentials
     if (this.anthropicKey) {
       return this.callAnthropic(prompt);
     } else if (this.openaiKey) {
       return this.callOpenAI(prompt);
     } else if (this.geminiKey) {
       return this.callGemini(prompt);
+    } else if (this.githubToken) {
+      return this.callCopilot(prompt);
     }
-    return 'AI analysis not available';
+
+    // Ollama doesn't require a key — try it as last resort
+    return this.callOllama(prompt);
   }
 
   /**
@@ -284,9 +332,98 @@ Provide a brief, actionable suggestion to fix these failures.`;
   }
 
   /**
-   * Check if AI analysis is available
+   * Call GitHub Copilot via the GitHub Models API (OpenAI-compatible)
+   * Requires GITHUB_TOKEN env var (from `gh auth token` or a PAT with copilot scope)
+   */
+  private async callCopilot(prompt: string): Promise<string> {
+    const token = this.githubToken;
+    if (!token) {
+      throw new Error('GitHub Copilot requires GITHUB_TOKEN env var (run `gh auth token` or use a PAT with copilot scope)');
+    }
+
+    const response = await fetch('https://models.github.com/inference/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        model: this.copilotModel,
+        max_tokens: 512,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub Copilot API error: ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      choices: Array<{ message: { content: string } }>;
+    };
+    return data.choices[0]?.message?.content || 'No suggestion available';
+  }
+
+  /**
+   * Call Ollama local LLM (OpenAI-compatible API)
+   * No API key required — Ollama must be running locally (default: http://localhost:11434)
+   */
+  private async callOllama(prompt: string): Promise<string> {
+    const baseUrl = this.ollamaBaseUrl.replace(/\/+$/, '');
+
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.ollamaModel,
+        messages: [{ role: 'user', content: prompt }],
+        options: {
+          num_predict: 512,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      choices: Array<{ message: { content: string } }>;
+    };
+    return data.choices[0]?.message?.content || 'No suggestion available';
+  }
+
+  /**
+   * Check if AI analysis is available.
+   *
+   * When an explicit provider is set, checks that the required credentials exist
+   * (Ollama always returns true since it needs no key).
+   * Otherwise returns true if any credential is available OR if ollama was explicitly selected.
    */
   isAvailable(): boolean {
-    return !!(this.anthropicKey || this.openaiKey || this.geminiKey);
+    if (this.explicitProvider) {
+      switch (this.explicitProvider) {
+        case 'anthropic': return !!this.anthropicKey;
+        case 'openai':    return !!this.openaiKey;
+        case 'gemini':    return !!this.geminiKey;
+        case 'copilot':   return !!this.githubToken;
+        case 'ollama':    return true; // No key needed
+      }
+    }
+    return !!(this.anthropicKey || this.openaiKey || this.geminiKey || this.githubToken);
+  }
+
+  /**
+   * Get the resolved provider name (for logging / debugging)
+   */
+  getActiveProvider(): string {
+    if (this.explicitProvider) return this.explicitProvider;
+    if (this.anthropicKey) return 'anthropic';
+    if (this.openaiKey) return 'openai';
+    if (this.geminiKey) return 'gemini';
+    if (this.githubToken) return 'copilot';
+    return 'ollama';
   }
 }

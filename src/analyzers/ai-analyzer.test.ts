@@ -58,6 +58,10 @@ describe('AIAnalyzer', () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENAI_API_KEY;
     delete process.env.GEMINI_API_KEY;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.OLLAMA_BASE_URL;
+    delete process.env.OLLAMA_MODEL;
+    delete process.env.COPILOT_MODEL;
     // Reset mocks
     vi.clearAllMocks();
   });
@@ -87,6 +91,32 @@ describe('AIAnalyzer', () => {
       const analyzer = new AIAnalyzer();
 
       expect(analyzer.isAvailable()).toBe(true);
+    });
+
+    it('returns true when GITHUB_TOKEN is set', () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+      const analyzer = new AIAnalyzer();
+
+      expect(analyzer.isAvailable()).toBe(true);
+    });
+
+    it('returns true when aiProvider is ollama (no key needed)', () => {
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+
+      expect(analyzer.isAvailable()).toBe(true);
+    });
+
+    it('returns true when aiProvider is copilot and GITHUB_TOKEN is set', () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+
+      expect(analyzer.isAvailable()).toBe(true);
+    });
+
+    it('returns false when aiProvider is copilot but no GITHUB_TOKEN', () => {
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+
+      expect(analyzer.isAvailable()).toBe(false);
     });
 
     it('returns true when multiple keys are set', () => {
@@ -129,7 +159,7 @@ describe('AIAnalyzer', () => {
       await analyzer.analyzeFailed(results);
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        '💡 Tip: Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY for AI failure analysis'
+        '💡 Tip: Set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or GITHUB_TOKEN for AI failure analysis. You can also use a local Ollama instance.'
       );
       expect(mockFetch).not.toHaveBeenCalled();
 
@@ -554,6 +584,483 @@ describe('AIAnalyzer', () => {
         'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
         expect.anything()
       );
+    });
+
+    it('falls back to Copilot when only GITHUB_TOKEN is set', async () => {
+      process.env.GITHUB_TOKEN = 'github-token';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Copilot response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer();
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://models.github.com/inference/chat/completions',
+        expect.anything()
+      );
+    });
+
+    it('falls back to Ollama when no keys are set but aiProvider is ollama', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Ollama response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:11434/v1/chat/completions',
+        expect.anything()
+      );
+    });
+  });
+
+  describe('GitHub Copilot provider', () => {
+    it('sends correct request to GitHub Models API', async () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Fix the selector' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      const results = [
+        createTestResult({
+          status: 'failed',
+          error: 'Element not found',
+          title: 'Login test',
+          file: 'login.spec.ts',
+        }),
+      ];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://models.github.com/inference/chat/completions',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Authorization': 'Bearer test-github-token',
+            'Content-Type': 'application/json',
+          }),
+        })
+      );
+      expect(results[0].aiSuggestion).toBe('Fix the selector');
+    });
+
+    it('uses claude-sonnet-4-20250514 as default model', async () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.model).toBe('claude-sonnet-4-20250514');
+    });
+
+    it('allows custom copilot model', async () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot', copilotModel: 'gpt-4o' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.model).toBe('gpt-4o');
+    });
+
+    it('allows copilot model from COPILOT_MODEL env var', async () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+      process.env.COPILOT_MODEL = 'o1-preview';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.model).toBe('o1-preview');
+    });
+
+    it('throws on Copilot API error', async () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to get AI suggestion'),
+        expect.any(Error)
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('handles empty choices array', async () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(results[0].aiSuggestion).toBe('No suggestion available');
+    });
+
+    it('analyzes clusters with Copilot', async () => {
+      process.env.GITHUB_TOKEN = 'test-github-token';
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Cluster fix' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      const clusters = [createFailureCluster()];
+
+      await analyzer.analyzeClusters(clusters);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://models.github.com/inference/chat/completions',
+        expect.anything()
+      );
+      expect(clusters[0].aiSuggestion).toBe('Cluster fix');
+    });
+  });
+
+  describe('Ollama provider', () => {
+    it('sends correct request to local Ollama server', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Local LLM suggestion' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [
+        createTestResult({
+          status: 'failed',
+          error: 'Element not found',
+          title: 'Search test',
+          file: 'search.spec.ts',
+        }),
+      ];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:11434/v1/chat/completions',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+          }),
+        })
+      );
+      expect(results[0].aiSuggestion).toBe('Local LLM suggestion');
+    });
+
+    it('uses codellama as default model', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.model).toBe('codellama');
+    });
+
+    it('allows custom ollama model', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama', ollamaModel: 'llama3.2' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.model).toBe('llama3.2');
+    });
+
+    it('allows custom ollama base URL', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama', ollamaBaseUrl: 'http://my-server:8080' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://my-server:8080/v1/chat/completions',
+        expect.anything()
+      );
+    });
+
+    it('reads OLLAMA_BASE_URL and OLLAMA_MODEL from env vars', async () => {
+      process.env.OLLAMA_BASE_URL = 'http://remote-ollama:11434';
+      process.env.OLLAMA_MODEL = 'mistral';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://remote-ollama:11434/v1/chat/completions',
+        expect.anything()
+      );
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.model).toBe('mistral');
+    });
+
+    it('strips trailing slash from base URL', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama', ollamaBaseUrl: 'http://localhost:11434/' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:11434/v1/chat/completions',
+        expect.anything()
+      );
+    });
+
+    it('throws on Ollama API error', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to get AI suggestion'),
+        expect.any(Error)
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('handles empty choices array', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(results[0].aiSuggestion).toBe('No suggestion available');
+    });
+
+    it('analyzes clusters with Ollama', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Local cluster fix' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const clusters = [createFailureCluster()];
+
+      await analyzer.analyzeClusters(clusters);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:11434/v1/chat/completions',
+        expect.anything()
+      );
+      expect(clusters[0].aiSuggestion).toBe('Local cluster fix');
+    });
+
+    it('sends options.num_predict in request body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.options.num_predict).toBe(512);
+    });
+  });
+
+  describe('Explicit aiProvider selection', () => {
+    it('uses copilot when aiProvider is set even if anthropic key exists', async () => {
+      process.env.ANTHROPIC_API_KEY = 'anthropic-key';
+      process.env.GITHUB_TOKEN = 'github-token';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Copilot response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://models.github.com/inference/chat/completions',
+        expect.anything()
+      );
+    });
+
+    it('uses ollama when aiProvider is set even if all keys exist', async () => {
+      process.env.ANTHROPIC_API_KEY = 'anthropic-key';
+      process.env.OPENAI_API_KEY = 'openai-key';
+      process.env.GITHUB_TOKEN = 'github-token';
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Ollama response' } }],
+        }),
+      });
+
+      const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:11434/v1/chat/completions',
+        expect.anything()
+      );
+    });
+  });
+
+  describe('getActiveProvider', () => {
+    it('returns explicit provider when set', () => {
+      const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
+      expect(analyzer.getActiveProvider()).toBe('copilot');
+    });
+
+    it('returns anthropic when ANTHROPIC_API_KEY is set', () => {
+      process.env.ANTHROPIC_API_KEY = 'key';
+      const analyzer = new AIAnalyzer();
+      expect(analyzer.getActiveProvider()).toBe('anthropic');
+    });
+
+    it('returns copilot when only GITHUB_TOKEN is set', () => {
+      process.env.GITHUB_TOKEN = 'token';
+      const analyzer = new AIAnalyzer();
+      expect(analyzer.getActiveProvider()).toBe('copilot');
+    });
+
+    it('returns ollama as last fallback', () => {
+      const analyzer = new AIAnalyzer();
+      expect(analyzer.getActiveProvider()).toBe('ollama');
     });
   });
 

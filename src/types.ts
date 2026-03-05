@@ -89,6 +89,19 @@ export interface SmartReporterOptions {
 
   // Issue #26: External run ID for consistent IDs across CI shards
   runId?: string;                  // Unique identifier for this test run (e.g. GITHUB_RUN_ID)
+
+  // AI Provider selection
+  // Explicitly choose which AI provider to use. When not set, auto-detects by env var priority:
+  // Anthropic > OpenAI > Gemini > Copilot > Ollama
+  aiProvider?: 'anthropic' | 'openai' | 'gemini' | 'copilot' | 'ollama';
+
+  // Ollama (local LLM) options
+  ollamaBaseUrl?: string;          // Default: 'http://localhost:11434'
+  ollamaModel?: string;            // Default: 'codellama' (or set OLLAMA_MODEL env var)
+
+  // GitHub Copilot options (uses GitHub Models API)
+  // Requires GITHUB_TOKEN env var (from `gh auth token` or PAT with copilot scope)
+  copilotModel?: string;           // Default: 'claude-sonnet-4-20250514'
 }
 
 // ============================================================================

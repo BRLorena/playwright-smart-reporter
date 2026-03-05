@@ -189,7 +189,12 @@ class SmartReporter implements Reporter {
 
     // Initialize other components
     this.failureClusterer = new FailureClusterer();
-    this.aiAnalyzer = new AIAnalyzer();
+    this.aiAnalyzer = new AIAnalyzer({
+      aiProvider: options.aiProvider,
+      ollamaBaseUrl: options.ollamaBaseUrl,
+      ollamaModel: options.ollamaModel,
+      copilotModel: options.copilotModel,
+    });
   }
 
   /**

@@ -5,7 +5,7 @@
 An intelligent Playwright HTML reporter with AI-powered failure analysis, flakiness detection, performance regression alerts, and a modern interactive dashboard.
 
 ![Report Overview](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/report-overview-v1.png)
-*Dashboard featuring: sidebar navigation, suite health grade, attention-based filtering, failure clusters, quick insights, and interactive trend charts*
+_Dashboard featuring: sidebar navigation, suite health grade, attention-based filtering, failure clusters, quick insights, and interactive trend charts_
 
 ## Installation
 
@@ -28,11 +28,14 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   reporter: [
-    ['playwright-smart-reporter', {
-      outputFile: 'smart-report.html',
-      historyFile: 'test-history.json',
-      maxHistoryRuns: 10,
-    }],
+    [
+      'playwright-smart-reporter',
+      {
+        outputFile: 'smart-report.html',
+        historyFile: 'test-history.json',
+        maxHistoryRuns: 10,
+      },
+    ],
   ],
 });
 ```
@@ -40,6 +43,7 @@ export default defineConfig({
 ## Features
 
 ### Core Analysis
+
 - **AI Failure Analysis** — Claude/OpenAI/Gemini-powered fix suggestions with batched analysis for large suites
 - **Flakiness Detection** — Historical tracking to identify unreliable tests (not single-run retries)
 - **Performance Regression Alerts** — Warns when tests get significantly slower than average
@@ -48,6 +52,7 @@ export default defineConfig({
 - **Test Retry Analysis** — Track tests that frequently need retries
 
 ### Interactive Dashboard
+
 - **Sidebar Navigation** — Overview, Tests, Trends, Comparison, Gallery views
 - **Theme Support** — Light, dark, and system theme with persistent preference
 - **Keyboard Shortcuts** — `1-5` switch views, `j/k` navigate tests, `f` focus search, `e` export summary
@@ -55,21 +60,25 @@ export default defineConfig({
 - **Exportable Summary Card** — One-click export of test run summary
 
 ### Step Timeline (v1.0.8)
+
 - **Flamechart Visualisation** — Colour-coded timeline bars showing step-level timing
 - **Categories** — Navigation (blue), Assertion (green), Action (purple), API (amber), Wait (grey)
 - **Step Filtering** — `filterPwApiSteps: true` hides verbose `pw:api` internal steps
 
 ### Enhanced Trend Charts (v1.0.8)
+
 - **Moving Averages** — Overlay on pass rate and duration trends
 - **Anomaly Detection** — 2-sigma outlier detection with visual markers
 - **Clickable History** — Click any chart bar to drill into that historical run
 
 ### CI Environment Detection (v1.0.8)
+
 - **Auto-detect** — GitHub Actions, GitLab CI, CircleCI, Jenkins, Azure DevOps, Buildkite
 - **Report Header** — Displays branch, commit SHA, and build ID automatically
 - **External Run ID** — `runId` option for consistent history across sharded CI runs
 
 ### Test Details
+
 - **Step Timing Breakdown** — Visual bars highlighting the slowest steps
 - **Network Logs** — API calls with status codes, timing, and payload details (from trace files)
 - **Inline Trace Viewer** — View traces directly in the dashboard
@@ -78,6 +87,7 @@ export default defineConfig({
 - **Annotation Support** — `@slow`, `@fixme`, `@skip`, `@issue`, custom annotations with styled badges
 
 ### Integration
+
 - **Slack/Teams Notifications** — Webhook alerts on failures
 - **Merge History CLI** — Combine parallel CI run histories
 - **Local Report Server** — `npx playwright-smart-reporter-serve report.html` with trace viewer support
@@ -89,71 +99,86 @@ export default defineConfig({
 
 ```typescript
 reporter: [
-  ['playwright-smart-reporter', {
-    // Core
-    outputFile: 'smart-report.html',
-    historyFile: 'test-history.json',
-    maxHistoryRuns: 10,
-    performanceThreshold: 0.2,
+  [
+    'playwright-smart-reporter',
+    {
+      // Core
+      outputFile: 'smart-report.html',
+      historyFile: 'test-history.json',
+      maxHistoryRuns: 10,
+      performanceThreshold: 0.2,
 
-    // Notifications
-    slackWebhook: process.env.SLACK_WEBHOOK_URL,
-    teamsWebhook: process.env.TEAMS_WEBHOOK_URL,
+      // Notifications
+      slackWebhook: process.env.SLACK_WEBHOOK_URL,
+      teamsWebhook: process.env.TEAMS_WEBHOOK_URL,
 
-    // Feature flags (all default to true unless noted)
-    enableRetryAnalysis: true,
-    enableFailureClustering: true,
-    enableStabilityScore: true,
-    enableGalleryView: true,
-    enableComparison: true,
-    enableAIRecommendations: true,
-    enableTrendsView: true,
-    enableTraceViewer: true,
-    enableHistoryDrilldown: false,    // default: false
-    enableNetworkLogs: true,
+      // Feature flags (all default to true unless noted)
+      enableRetryAnalysis: true,
+      enableFailureClustering: true,
+      enableStabilityScore: true,
+      enableGalleryView: true,
+      enableComparison: true,
+      enableAIRecommendations: true,
+      enableTrendsView: true,
+      enableTraceViewer: true,
+      enableHistoryDrilldown: false, // default: false
+      enableNetworkLogs: true,
 
-    // Step and path options
-    filterPwApiSteps: false,          // Hide pw:api steps
-    relativeToCwd: false,             // Paths relative to cwd instead of rootDir
+      // Step and path options
+      filterPwApiSteps: false, // Hide pw:api steps
+      relativeToCwd: false, // Paths relative to cwd instead of rootDir
 
-    // Multi-project
-    projectName: 'ui-tests',          // Isolate history per project
-    runId: process.env.GITHUB_RUN_ID, // Consistent ID across CI shards
+      // Multi-project
+      projectName: 'ui-tests', // Isolate history per project
+      runId: process.env.GITHUB_RUN_ID, // Consistent ID across CI shards
 
-    // Network logging
-    networkLogFilter: 'api.example.com',
-    networkLogExcludeAssets: true,
-    networkLogMaxEntries: 50,
+      // Network logging
+      networkLogFilter: 'api.example.com',
+      networkLogExcludeAssets: true,
+      networkLogMaxEntries: 50,
 
-    // Thresholds
-    stabilityThreshold: 70,
-    retryFailureThreshold: 3,
-    baselineRunId: 'main-branch-baseline',
+      // Thresholds
+      stabilityThreshold: 70,
+      retryFailureThreshold: 3,
+      baselineRunId: 'main-branch-baseline',
 
-    // Configurable thresholds (v1.0.8)
-    thresholds: {
-      flakinessStable: 0.1,           // Below this = stable
-      flakinessUnstable: 0.3,         // Below this = unstable, above = flaky
-      performanceRegression: 0.2,     // 20% slower triggers regression
-      stabilityWeightFlakiness: 0.4,  // Must sum to 1.0
-      stabilityWeightPerformance: 0.3,
-      stabilityWeightReliability: 0.3,
-      gradeA: 90,
-      gradeB: 80,
-      gradeC: 70,
-      gradeD: 60,
+      // Configurable thresholds (v1.0.8)
+      thresholds: {
+        flakinessStable: 0.1, // Below this = stable
+        flakinessUnstable: 0.3, // Below this = unstable, above = flaky
+        performanceRegression: 0.2, // 20% slower triggers regression
+        stabilityWeightFlakiness: 0.4, // Must sum to 1.0
+        stabilityWeightPerformance: 0.3,
+        stabilityWeightReliability: 0.3,
+        gradeA: 90,
+        gradeB: 80,
+        gradeC: 70,
+        gradeD: 60,
+      },
+
+      // Advanced
+      cspSafe: false, // CSP-compliant mode (file refs instead of base64)
+      maxEmbeddedSize: 5 * 1024 * 1024, // Max bytes for inline base64 traces
+
+      // AI Provider selection (auto-detects by default)
+      aiProvider: 'copilot', // 'anthropic' | 'openai' | 'gemini' | 'copilot' | 'ollama'
+
+      // GitHub Copilot options (requires GITHUB_TOKEN env var)
+      copilotModel: 'claude-sonnet-4-20250514', // Default model via GitHub Models API
+
+      // Ollama (local LLM) options
+      ollamaBaseUrl: 'http://localhost:11434', // Default Ollama server URL
+      ollamaModel: 'codellama', // Any model pulled in Ollama
     },
-
-    // Advanced
-    cspSafe: false,                   // CSP-compliant mode (file refs instead of base64)
-    maxEmbeddedSize: 5 * 1024 * 1024, // Max bytes for inline base64 traces
-  }],
-]
+  ],
+];
 ```
 
 ### AI Analysis
 
-Set one of these environment variables to enable AI-powered failure analysis:
+Smart Reporter supports **5 AI providers** for failure analysis. Set the appropriate environment variable, or explicitly choose a provider with `aiProvider`.
+
+#### Cloud Providers
 
 ```bash
 export ANTHROPIC_API_KEY=your-key    # Claude (preferred)
@@ -161,47 +186,111 @@ export OPENAI_API_KEY=your-key       # OpenAI
 export GEMINI_API_KEY=your-key       # Google Gemini
 ```
 
-Provider priority: Anthropic > OpenAI > Gemini. The reporter analyses failures in batches and provides fix suggestions in the report.
+#### GitHub Copilot
+
+Use AI analysis through your existing GitHub Copilot subscription via the **GitHub Models API**. This is ideal for companies that only allow Copilot usage.
+
+```bash
+# Option 1: Use GitHub CLI token
+export GITHUB_TOKEN=$(gh auth token)
+
+# Option 2: Use a Personal Access Token (needs 'copilot' scope)
+export GITHUB_TOKEN=ghp_your_token_here
+```
+
+```typescript
+reporter: [
+  [
+    'playwright-smart-reporter',
+    {
+      aiProvider: 'copilot',
+      copilotModel: 'claude-sonnet-4-20250514', // default (also supports 'gpt-4o', 'o1-preview', etc.)
+    },
+  ],
+];
+```
+
+#### Ollama (Local LLM)
+
+Run AI analysis entirely on your machine using [Ollama](https://ollama.ai) — no API keys, no data leaves your network.
+
+```bash
+# Install and start Ollama, then pull a model
+ollama pull codellama
+```
+
+```typescript
+reporter: [
+  [
+    'playwright-smart-reporter',
+    {
+      aiProvider: 'ollama',
+      ollamaModel: 'codellama', // or 'llama3.2', 'mistral', 'deepseek-coder', etc.
+      ollamaBaseUrl: 'http://localhost:11434', // optional, this is the default
+    },
+  ],
+];
+```
+
+**Recommended Ollama models for test analysis:** `codellama`, `deepseek-coder`, `llama3.2`, `mistral`
+
+#### Provider Priority
+
+When `aiProvider` is not set, the reporter auto-detects by checking environment variables in this order:
+
+| Priority | Provider  | Env Var             | Endpoint                          |
+| -------- | --------- | ------------------- | --------------------------------- |
+| 1        | Anthropic | `ANTHROPIC_API_KEY` | api.anthropic.com                 |
+| 2        | OpenAI    | `OPENAI_API_KEY`    | api.openai.com                    |
+| 3        | Gemini    | `GEMINI_API_KEY`    | generativelanguage.googleapis.com |
+| 4        | Copilot   | `GITHUB_TOKEN`      | models.github.com                 |
+| 5        | Ollama    | _(none needed)_     | localhost:11434                   |
 
 ## Report Views
 
 ### Overview
+
 Pass rate ring, suite health grade (A+ to F), stat cards, attention-required highlights, failure clusters, and quick insights (slowest test, most flaky, distribution).
 
 ### Tests
+
 Filter by status, health, grade, attention badges, suite, and tags. Search by name. Each card shows duration, stability grade, flakiness indicator, history dots (clickable for drilldown), and expandable details with steps, errors, screenshots, and AI suggestions.
 
 ### Trends
+
 Interactive charts for pass rate, duration, flaky tests, and slow tests over time. Moving averages and anomaly markers. Click any bar to view that historical run.
 
 ### Comparison
+
 Compare current run against a baseline: pass rate change, duration change, test count differences.
 
 ### Gallery
+
 Visual grid of all test attachments — screenshots, videos, and trace files with status filtering.
 
 ## Flakiness Detection
 
 Smart Reporter tracks flakiness **across runs**, not within a single run:
 
-| | Playwright HTML Report | Smart Reporter |
-|---|---|---|
-| **Scope** | Single test run | Historical across multiple runs |
+|              | Playwright HTML Report     | Smart Reporter                       |
+| ------------ | -------------------------- | ------------------------------------ |
+| **Scope**    | Single test run            | Historical across multiple runs      |
 | **Criteria** | Fails then passes on retry | Failed 30%+ of the time historically |
-| **Use Case** | Immediate retry success | Chronically unreliable tests |
+| **Use Case** | Immediate retry success    | Chronically unreliable tests         |
 
 Indicators:
+
 - **Stable** (<10% failure rate) — **Unstable** (10-30%) — **Flaky** (>30%) — **New** (no history)
 
 ## Stability Grades
 
 Composite score (0-100) from three factors:
 
-| Factor | Weight | Description |
-|---|---|---|
-| Reliability | 40% | Pass rate from history |
-| Flakiness | 35% | Inverse of flakiness score |
-| Performance | 25% | Execution time consistency |
+| Factor      | Weight | Description                |
+| ----------- | ------ | -------------------------- |
+| Reliability | 40%    | Pass rate from history     |
+| Flakiness   | 35%    | Inverse of flakiness score |
+| Performance | 25%    | Execution time consistency |
 
 Grades: **A+** (95-100), **A** (90-94), **B** (80-89), **C** (70-79), **D** (60-69), **F** (<60). All weights and thresholds are configurable via `ThresholdConfig`.
 
@@ -209,10 +298,13 @@ Grades: **A+** (95-100), **A** (90-94), **B** (80-89), **C** (70-79), **D** (60-
 
 ```typescript
 reporter: [
-  ['playwright-smart-reporter', {
-    filterPwApiSteps: true,  // Only show custom test.step() entries
-  }],
-]
+  [
+    'playwright-smart-reporter',
+    {
+      filterPwApiSteps: true, // Only show custom test.step() entries
+    },
+  ],
+];
 ```
 
 With filtering on, verbose `page.click()`, `page.fill()` steps are hidden — only your named `test.step()` entries appear.
@@ -223,26 +315,33 @@ Isolate history per test suite to prevent metric contamination:
 
 ```typescript
 reporter: [
-  ['playwright-smart-reporter', {
-    projectName: 'api',
-    historyFile: 'reports/{project}/history.json',
-    // Creates: reports/api/history.json
-  }],
-]
+  [
+    'playwright-smart-reporter',
+    {
+      projectName: 'api',
+      historyFile: 'reports/{project}/history.json',
+      // Creates: reports/api/history.json
+    },
+  ],
+];
 ```
 
 ## Trace Viewer
 
 ### Inline Viewer
+
 Click **View** on any test with traces to open the built-in viewer with film strip, actions panel, before/after screenshots, network waterfall, console messages, and errors.
 
 ### Local Server
+
 ```bash
 npx playwright-smart-reporter-serve smart-report.html
 ```
+
 Serves the report locally with full trace viewer support — no `file://` CORS issues.
 
 ### CLI Viewer
+
 ```bash
 npx playwright-smart-reporter-view-trace ./traces/my-test-trace-0.zip
 ```
@@ -262,9 +361,7 @@ use: {
 For environments with strict Content Security Policy:
 
 ```typescript
-reporter: [
-  ['playwright-smart-reporter', { cspSafe: true }],
-]
+reporter: [['playwright-smart-reporter', { cspSafe: true }]];
 ```
 
 Screenshots saved as separate files instead of base64, system fonts instead of Google Fonts, file references instead of embedded data. Smaller report size but requires the entire report directory to be shared.
@@ -273,27 +370,30 @@ Screenshots saved as separate files instead of base64, system fonts instead of G
 
 ```typescript
 reporter: [
-  ['playwright-smart-reporter', {
-    enableHistoryDrilldown: true,
-    maxHistoryRuns: 10,
-  }],
-]
+  [
+    'playwright-smart-reporter',
+    {
+      enableHistoryDrilldown: true,
+      maxHistoryRuns: 10,
+    },
+  ],
+];
 ```
 
 Click history dots on any test card to view results from previous runs. Stores JSON snapshots in `history-runs/` (~1-5KB per test per run).
 
 ## Annotations
 
-| Annotation | Badge | Annotation | Badge |
-|---|---|---|---|
-| `@slow` | Amber | `@fixme` / `@fix` | Pink |
-| `@skip` | Indigo | `@fail` | Red |
-| `@issue` / `@bug` | Red | `@flaky` | Orange |
-| `@todo` | Blue | Custom | Grey |
+| Annotation        | Badge  | Annotation        | Badge  |
+| ----------------- | ------ | ----------------- | ------ |
+| `@slow`           | Amber  | `@fixme` / `@fix` | Pink   |
+| `@skip`           | Indigo | `@fail`           | Red    |
+| `@issue` / `@bug` | Red    | `@flaky`          | Orange |
+| `@todo`           | Blue   | Custom            | Grey   |
 
 ```typescript
 test('payment flow', async ({ page }) => {
-  test.slow();  // Shows amber @slow badge
+  test.slow(); // Shows amber @slow badge
   test.info().annotations.push({ type: 'issue', description: 'JIRA-123' });
 });
 ```
@@ -374,10 +474,13 @@ For consistent history across parallel shards, set `runId`:
 
 ```typescript
 reporter: [
-  ['playwright-smart-reporter', {
-    runId: process.env.GITHUB_RUN_ID,
-  }],
-]
+  [
+    'playwright-smart-reporter',
+    {
+      runId: process.env.GITHUB_RUN_ID,
+    },
+  ],
+];
 ```
 
 ### Merging History from Multiple Machines
@@ -445,13 +548,13 @@ Enable `cspSafe: true` to save attachments as files instead of embedding, or red
 
 ## Troubleshooting
 
-| Problem | Cause | Fix |
-|---|---|---|
-| No history data | History file missing or wrong path | Check `historyFile` path, use CI caching |
-| No network logs | Tracing not enabled | Add `trace: 'retain-on-failure'` to config |
-| No AI suggestions | Missing API key | Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` |
-| Mixed project metrics | Shared history file | Use `projectName` to isolate |
-| Wrong path resolution | Relative to rootDir | Enable `relativeToCwd: true` |
+| Problem               | Cause                              | Fix                                                            |
+| --------------------- | ---------------------------------- | -------------------------------------------------------------- |
+| No history data       | History file missing or wrong path | Check `historyFile` path, use CI caching                       |
+| No network logs       | Tracing not enabled                | Add `trace: 'retain-on-failure'` to config                     |
+| No AI suggestions     | Missing API key                    | Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` |
+| Mixed project metrics | Shared history file                | Use `projectName` to isolate                                   |
+| Wrong path resolution | Relative to rootDir                | Enable `relativeToCwd: true`                                   |
 
 ## Development
 

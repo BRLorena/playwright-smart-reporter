@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.4] - 2026-03-05
+
+### Added
+
+- **Mobile responsive report**: Three-breakpoint responsive CSS (768px tablet, 600px phone, 480px small phone) — sidebar becomes overlay drawer on phones, hero stats stack to 2-col grid, master-detail stacks vertically, compact padding/fonts throughout, full-width menus on mobile
+
 ## [1.6.3] - 2026-03-04
 
 ### Added

@@ -7503,8 +7503,10 @@ ${highContrastOverride}${customOverrides}
     }
 
     /* ============================================
-       MOBILE RESPONSIVE - PERSISTENT SIDEBAR
+       MOBILE RESPONSIVE
     ============================================ */
+
+    /* --- Tablet (768px) --- */
     @media (max-width: 768px) {
       :root {
         --sidebar-width: 200px;
@@ -7526,7 +7528,6 @@ ${highContrastOverride}${customOverrides}
         width: var(--sidebar-width);
       }
 
-      /* Hide overlay on mobile - sidebar is persistent */
       .sidebar-overlay {
         display: none;
       }
@@ -7539,11 +7540,19 @@ ${highContrastOverride}${customOverrides}
         display: none;
       }
 
+      .search-trigger {
+        min-width: 44px;
+        padding: 0.4rem;
+      }
+
+      .timestamp {
+        display: none;
+      }
+
       .filter-chips {
         flex-wrap: wrap;
       }
 
-      /* Compact sidebar elements */
       .sidebar-progress {
         padding: 0.75rem;
       }
@@ -7588,6 +7597,266 @@ ${highContrastOverride}${customOverrides}
       .mini-stat-label {
         font-size: 0.55rem;
       }
+
+      .hero-stats {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+
+      .master-detail-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .test-list-panel {
+        max-height: 50vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+
+      .gallery-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 0.75rem;
+      }
+
+      .comparison-summary {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .comparison-item-details {
+        flex-wrap: wrap;
+        font-size: 0.7rem;
+      }
+
+      .trend-chart {
+        height: 100px;
+      }
+
+      .network-entry-header {
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .network-url {
+        font-size: 11px;
+      }
+    }
+
+    /* --- Phone (600px) --- */
+    @media (max-width: 600px) {
+      :root {
+        --sidebar-width: 0px;
+      }
+
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 260px;
+        height: 100vh;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        z-index: 200;
+        background: var(--bg-primary);
+      }
+
+      .app-shell:not(.sidebar-collapsed) .sidebar {
+        transform: translateX(0);
+      }
+
+      .sidebar-overlay {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 199;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s;
+      }
+
+      .app-shell:not(.sidebar-collapsed) .sidebar-overlay {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .app-shell.sidebar-collapsed .sidebar {
+        transform: translateX(-100%);
+      }
+
+      .sidebar-toggle {
+        display: flex;
+      }
+
+      .top-bar {
+        padding: 0 0.5rem;
+        gap: 0.25rem;
+      }
+
+      .overview-content {
+        padding: 1rem;
+      }
+
+      .view-header {
+        padding: 0.75rem 1rem;
+      }
+    }
+
+    /* --- Small phone (480px) --- */
+    @media (max-width: 480px) {
+      .hero-stats {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+      }
+
+      .hero-stat-card {
+        padding: 0.75rem;
+      }
+
+      .hero-stat-value, .health-value {
+        font-size: 1.25rem;
+      }
+
+      .hero-stat-label {
+        font-size: 0.7rem;
+      }
+
+      .hero-stat-detail {
+        font-size: 0.65rem;
+      }
+
+      .health-gauge {
+        width: 60px;
+        height: 60px;
+      }
+
+      .health-grade {
+        font-size: 0.9rem;
+      }
+
+      .stat-card.large {
+        padding: 0.75rem;
+        gap: 0.5rem;
+      }
+
+      .stat-icon {
+        width: 36px;
+        height: 36px;
+        font-size: 1rem;
+      }
+
+      .detail-title {
+        font-size: 1rem;
+      }
+
+      .upgrade-banner {
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 1rem;
+      }
+
+      .upgrade-banner-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+      }
+
+      .upgrade-banner-text {
+        font-size: 0.78rem;
+      }
+
+      .upgrade-banner-actions {
+        width: 100%;
+      }
+
+      .upgrade-banner-btn {
+        flex: 1;
+        text-align: center;
+      }
+
+      .upgrade-modal {
+        width: 95%;
+        padding: 1.25rem;
+      }
+
+      .upgrade-modal-title {
+        font-size: 1rem;
+      }
+
+      .upgrade-modal-desc {
+        font-size: 0.8rem;
+      }
+
+      .feature-usage-columns {
+        grid-template-columns: 1fr;
+      }
+
+      .gallery-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .gallery-section {
+        padding: 1rem;
+      }
+
+      .gallery-item-preview {
+        height: 120px;
+      }
+
+      .comparison-summary {
+        grid-template-columns: 1fr;
+      }
+
+      .comparison-item-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .comparison-card-value {
+        font-size: 1.25rem;
+      }
+
+      .trend-chart {
+        height: 80px;
+        padding: 12px 8px 8px;
+      }
+
+      .secondary-trends-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .insight-card {
+        padding: 0.75rem;
+      }
+
+      .insight-icon {
+        display: none;
+      }
+
+      .export-menu, .theme-menu {
+        position: fixed;
+        right: 0;
+        top: 48px;
+        max-height: calc(100vh - 48px);
+        width: 100vw;
+        max-width: 280px;
+        border-radius: 0 0 0 12px;
+        z-index: 1001;
+      }
+
+      .step-title {
+        font-size: 0.7rem;
+      }
+
+      .step-duration {
+        font-size: 0.7rem;
+        min-width: auto;
+      }
+
+      .mini-bars { gap: 0.25rem; }
+      .mini-bar-label { font-size: 0.65rem; }
+      .mini-bar-value { font-size: 0.65rem; }
     }
 
     /* ============================================

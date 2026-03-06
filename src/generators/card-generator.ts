@@ -4,19 +4,20 @@
 
 import type { TestResultData, NetworkLogData, NetworkLogEntry } from '../types';
 import { formatDuration, escapeHtml, sanitizeId, renderMarkdownLite } from '../utils';
+import { icon } from './icon-provider';
 
 /**
  * Get appropriate icon for attachment content type
  */
 function getAttachmentIcon(contentType: string): string {
-  if (contentType.startsWith('image/')) return '🖼️';
-  if (contentType.startsWith('video/')) return '🎬';
-  if (contentType.startsWith('audio/')) return '🔊';
-  if (contentType.startsWith('text/')) return '📄';
-  if (contentType.includes('json')) return '📋';
-  if (contentType.includes('pdf')) return '📑';
-  if (contentType.includes('zip') || contentType.includes('tar') || contentType.includes('gzip')) return '📦';
-  return '📎';
+  if (contentType.startsWith('image/')) return icon('image');
+  if (contentType.startsWith('video/')) return icon('film');
+  if (contentType.startsWith('audio/')) return icon('volume-2');
+  if (contentType.startsWith('text/')) return icon('file');
+  if (contentType.includes('json')) return icon('braces');
+  if (contentType.includes('pdf')) return icon('file-text');
+  if (contentType.includes('zip') || contentType.includes('tar') || contentType.includes('gzip')) return icon('package');
+  return icon('paperclip');
 }
 
 /**
@@ -24,11 +25,11 @@ function getAttachmentIcon(contentType: string): string {
  */
 function getBrowserIcon(browser: string): string {
   const name = browser.toLowerCase();
-  if (name.includes('chromium') || name.includes('chrome')) return '🌐';
-  if (name.includes('firefox')) return '🦊';
-  if (name.includes('webkit') || name.includes('safari')) return '🧭';
-  if (name.includes('edge')) return '🔷';
-  return '🖥️';
+  if (name.includes('chromium') || name.includes('chrome')) return icon('globe', 12);
+  if (name.includes('firefox')) return icon('flame', 12);
+  if (name.includes('webkit') || name.includes('safari')) return icon('compass', 12);
+  if (name.includes('edge')) return icon('hexagon', 12);
+  return icon('monitor', 12);
 }
 
 /**
@@ -36,21 +37,21 @@ function getBrowserIcon(browser: string): string {
  */
 function getAnnotationIcon(type: string): string {
   const t = type.toLowerCase();
-  if (t === 'slow') return '🐢';
-  if (t === 'fixme' || t === 'fix') return '🔧';
-  if (t === 'skip') return '⏭️';
-  if (t === 'fail' || t === 'expected-failure') return '❌';
-  if (t === 'issue' || t === 'bug') return '🐛';
-  if (t === 'flaky') return '🎲';
-  if (t === 'todo') return '📝';
-  return '📌';
+  if (t === 'slow') return icon('hourglass', 12);
+  if (t === 'fixme' || t === 'fix') return icon('wrench', 12);
+  if (t === 'skip') return icon('skip-forward', 12);
+  if (t === 'fail' || t === 'expected-failure') return icon('x-circle', 12);
+  if (t === 'issue' || t === 'bug') return icon('bug', 12);
+  if (t === 'flaky') return icon('shuffle', 12);
+  if (t === 'todo') return icon('pencil', 12);
+  return icon('pin', 12);
 }
 
 /**
  * Generate a single test card
  */
-export function generateTestCard(test: TestResultData, showTraceSection: boolean): string {
-  const isFlaky = test.flakinessScore !== undefined && test.flakinessScore >= 0.3;
+export function generateTestCard(test: TestResultData, showTraceSection: boolean, quarantinedTestIds?: Set<string>): string {
+  const isFlaky = (test.flakinessScore !== undefined && test.flakinessScore >= 0.3) || test.outcome === 'flaky';
   const isUnstable = test.flakinessScore !== undefined && test.flakinessScore >= 0.1 && test.flakinessScore < 0.3;
   const isSlow = test.performanceTrend?.startsWith('↑') || false;
   const isFaster = test.performanceTrend?.startsWith('↓') || false;
@@ -117,11 +118,17 @@ export function generateTestCard(test: TestResultData, showTraceSection: boolean
       }).join('')
     : '';
 
+  // Quarantine badge
+  const isQuarantined = quarantinedTestIds?.has(test.testId) ?? false;
+  const quarantineBadgeHtml = isQuarantined
+    ? '<span class="test-annotation-badge annotation-quarantine" title="Quarantined due to high flakiness">Quarantined</span>'
+    : '';
+
   // Combine all badges into a single badges row for cleaner layout
-  const hasBadges = browserHtml || projectHtml || annotationsHtml || tagsHtml;
+  const hasBadges = browserHtml || projectHtml || annotationsHtml || tagsHtml || quarantineBadgeHtml;
   const badgesHtml = hasBadges ? `
               <div class="test-badges-row">
-                ${browserHtml}${projectHtml}${annotationsHtml ? `<span class="badge-separator"></span>${annotationsHtml}` : ''}${tagsHtml ? `${annotationsHtml ? '' : '<span class="badge-separator"></span>'}${tagsHtml}` : ''}
+                ${quarantineBadgeHtml}${browserHtml}${projectHtml}${annotationsHtml ? `<span class="badge-separator"></span>${annotationsHtml}` : ''}${tagsHtml ? `${annotationsHtml ? '' : '<span class="badge-separator"></span>'}${tagsHtml}` : ''}
               </div>` : '';
 
   return `
@@ -131,7 +138,8 @@ export function generateTestCard(test: TestResultData, showTraceSection: boolean
          data-unstable="${isUnstable}"
          data-slow="${isSlow}"
          data-new="${isNew}"
-         data-grade="${test.stabilityScore?.grade || ''}"${tagsAttr}${suiteAttr}${suitesAttr}${browserAttr}${projectAttr}>
+         data-grade="${test.stabilityScore?.grade || ''}"${tagsAttr}${suiteAttr}${suitesAttr}${browserAttr}${projectAttr}
+         data-quarantined="${isQuarantined}">
       <div class="test-card-header" ${hasDetails ? `onclick="toggleDetails('${cardId}', event)"` : ''}>
         <div class="test-card-left">
           <div class="status-indicator ${test.status === 'passed' ? 'passed' : test.status === 'skipped' ? 'skipped' : 'failed'}"></div>
@@ -150,7 +158,7 @@ export function generateTestCard(test: TestResultData, showTraceSection: boolean
           ${test.stabilityScore ? `<span class="badge ${stabilityClass}" title="Stability Score: ${test.stabilityScore.overall}/100 (Flakiness: ${test.stabilityScore.flakiness}, Performance: ${test.stabilityScore.performance}, Reliability: ${test.stabilityScore.reliability})">${test.stabilityScore.grade} (${test.stabilityScore.overall})</span>` : ''}
           ${test.flakinessIndicator ? `<span class="badge ${badgeClass}">${test.flakinessIndicator.replace(/[🟢🟡🔴⚪]\s*/g, '')}</span>` : ''}
           ${test.performanceTrend ? `<span class="trend ${trendClass}">${test.performanceTrend}</span>` : ''}
-          ${hasDetails ? `<span class="expand-icon">▶</span>` : ''}
+          ${hasDetails ? `<span class="expand-icon">${icon('chevron-right', 14)}</span>` : ''}
         </div>
       </div>
       ${hasDetails ? generateTestDetails(test, cardId, showTraceSection) : ''}
@@ -182,7 +190,7 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
 
 	    historyDetails += `
 	      <div class="detail-section">
-	        <div class="detail-label"><span class="icon">📊</span> Run History (Last ${test.history.length} runs)</div>
+	        <div class="detail-label"><span class="icon">${icon('bar-chart-2')}</span> Run History (Last ${test.history.length} runs)</div>
 	        <div class="history-section">
 	          <div class="history-column">
 	            <div class="history-label">Pass/Fail</div>
@@ -259,7 +267,7 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
 
     bodyDetails += `
       <div class="detail-section">
-        <div class="detail-label"><span class="icon">⏱</span> Step Timeline</div>
+        <div class="detail-label"><span class="icon">${icon('clock')}</span> Step Timeline</div>
         <div class="step-timeline">${timelineBars}</div>
         <div class="step-timeline-legend">${legendHtml}</div>
         <div class="steps-container" style="margin-top: 8px;">
@@ -306,7 +314,7 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
 
     bodyDetails += `
       <div class="detail-section">
-        <div class="detail-label"><span class="icon">⚠</span> Error</div>
+        <div class="detail-label"><span class="icon">${icon('alert-triangle')}</span> Error</div>
         ${diffHtml}
         <div class="error-box">${escapeHtml(test.error)}</div>
       </div>
@@ -320,7 +328,7 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
   if (showTraceViewer) {
     bodyDetails += `
       <div class="detail-section">
-        <div class="detail-label"><span class="icon">📊</span> Trace</div>
+        <div class="detail-label"><span class="icon">${icon('bar-chart-2')}</span> Trace</div>
         <div class="trace-list">
           ${tracePaths.map((trace, idx) => {
             const suffix = tracePaths.length > 1 ? ` #${idx + 1}` : '';
@@ -331,14 +339,14 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
               <div class="trace-row">
                 <div class="trace-meta">
                   <div class="trace-file">
-                    <span class="trace-file-icon">📦</span>
+                    <span class="trace-file-icon">${icon('package')}</span>
                     <span class="trace-file-name" title="${safeTrace}">${fileName}${suffix}</span>
                   </div>
                   <div class="trace-path" title="${safeTrace}">${safeTrace}</div>
                 </div>
                 <div class="trace-actions">
-                  <a href="${safeTrace}" class="attachment-link" download>⬇ Download</a>
-                  <a href="#" class="attachment-link" data-trace="${safeTrace}" onclick="return viewTraceFromEl(this)">🔍 View</a>
+                  <a href="${safeTrace}" class="attachment-link" download>${icon('download')} Download</a>
+                  <a href="#" class="attachment-link" data-trace="${safeTrace}" onclick="return viewTraceFromEl(this)">${icon('search')} View</a>
                 </div>
               </div>
             `;
@@ -351,7 +359,7 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
   if (test.screenshot) {
     bodyDetails += `
       <div class="detail-section">
-        <div class="detail-label"><span class="icon">📸</span> Screenshot</div>
+        <div class="detail-label"><span class="icon">${icon('camera')}</span> Screenshot</div>
         <div class="screenshot-box">
           <img src="${test.screenshot}" alt="Failure screenshot" onclick="window.open(this.src, '_blank')" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"/>
           <div class="screenshot-fallback" style="display:none;">
@@ -366,9 +374,9 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
   if (test.videoPath) {
     bodyDetails += `
       <div class="detail-section">
-        <div class="detail-label"><span class="icon">📎</span> Attachments</div>
+        <div class="detail-label"><span class="icon">${icon('paperclip')}</span> Attachments</div>
         <div class="attachments">
-          <a href="file://${test.videoPath}" class="attachment-link" target="_blank">🎬 Video</a>
+          <a href="file://${test.videoPath}" class="attachment-link" target="_blank">${icon('film')} Video</a>
         </div>
       </div>
     `;
@@ -390,7 +398,7 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
 
     bodyDetails += `
       <div class="detail-section">
-        <div class="detail-label"><span class="icon">📎</span> Custom Attachments</div>
+        <div class="detail-label"><span class="icon">${icon('paperclip')}</span> Custom Attachments</div>
         <div class="attachments">
           ${customAttachmentsList}
         </div>
@@ -401,7 +409,7 @@ export function generateTestDetails(test: TestResultData, cardId: string, showTr
   if (test.aiSuggestion) {
     bodyDetails += `
       <div class="detail-section">
-        <div class="detail-label"><span class="icon">🤖</span> AI Suggestion</div>
+        <div class="detail-label"><span class="icon">${icon('bot')}</span> AI Suggestion</div>
         <div class="ai-box ai-markdown">${renderMarkdownLite(test.aiSuggestion)}</div>
       </div>
     `;
@@ -436,7 +444,7 @@ export interface AttentionSets {
 /**
  * Generate grouped tests by file - uses list items for selection behavior
  */
-export function generateGroupedTests(results: TestResultData[], showTraceSection: boolean, attention: AttentionSets = { newFailures: new Set(), regressions: new Set(), fixed: new Set() }): string {
+export function generateGroupedTests(results: TestResultData[], showTraceSection: boolean, attention: AttentionSets = { newFailures: new Set(), regressions: new Set(), fixed: new Set() }, quarantinedTestIds?: Set<string>): string {
   // Group tests by file
   const groups = new Map<string, TestResultData[]>();
   for (const test of results) {
@@ -456,7 +464,7 @@ export function generateGroupedTests(results: TestResultData[], showTraceSection
     const testListItems = tests.map(test => {
       const cardId = sanitizeId(test.testId);
       const statusClass = test.status === 'passed' ? 'passed' : test.status === 'skipped' ? 'skipped' : 'failed';
-      const isFlaky = test.flakinessScore !== undefined && test.flakinessScore >= 0.3;
+      const isFlaky = (test.flakinessScore !== undefined && test.flakinessScore >= 0.3) || test.outcome === 'flaky';
       const isSlow = test.performanceTrend?.startsWith('↑') || false;
       const isNew = test.flakinessIndicator?.includes('New') || false;
       
@@ -464,7 +472,8 @@ export function generateGroupedTests(results: TestResultData[], showTraceSection
       const isNewFailure = attention.newFailures.has(test.testId);
       const isRegression = attention.regressions.has(test.testId);
       const isFixed = attention.fixed.has(test.testId);
-      
+      const isQuarantinedItem = quarantinedTestIds?.has(test.testId) ?? false;
+
       // Determine stability badge
       let stabilityBadge = '';
       if (test.stabilityScore) {
@@ -475,7 +484,7 @@ export function generateGroupedTests(results: TestResultData[], showTraceSection
       }
 
       return `
-        <div class="test-list-item ${statusClass}" 
+        <div class="test-list-item ${statusClass}"
              id="list-item-${cardId}"
              data-testid="${escapeHtml(test.testId)}"
              data-status="${test.status}"
@@ -487,6 +496,7 @@ export function generateGroupedTests(results: TestResultData[], showTraceSection
              data-fixed="${isFixed}"
              data-file="${escapeHtml(test.file)}"
              data-grade="${test.stabilityScore?.grade || ''}"
+             data-quarantined="${isQuarantinedItem}"
              onclick="selectTest('${cardId}')">
           <div class="test-item-status">
             <div class="status-dot ${statusClass}"></div>
@@ -495,6 +505,7 @@ export function generateGroupedTests(results: TestResultData[], showTraceSection
             <div class="test-item-title">${escapeHtml(test.title)}</div>
           </div>
           <div class="test-item-meta">
+            ${isQuarantinedItem ? '<span class="test-item-badge quarantined">Quarantined</span>' : ''}
             ${isNewFailure ? '<span class="test-item-badge new-failure">New Failure</span>' : ''}
             ${isRegression ? '<span class="test-item-badge regression">Regression</span>' : ''}
             ${isFixed ? '<span class="test-item-badge fixed">Fixed</span>' : ''}
@@ -512,7 +523,7 @@ export function generateGroupedTests(results: TestResultData[], showTraceSection
     <div id="group-${groupId}" class="file-group">
       <div class="file-group-header" onclick="toggleGroup('${groupId}')">
         <span class="expand-icon">▼</span>
-        <span class="file-group-name">📄 ${escapeHtml(file)}</span>
+        <span class="file-group-name">${icon('file')} ${escapeHtml(file)}</span>
         <div class="file-group-stats">
           ${passed > 0 ? `<span class="file-group-stat passed">${passed} passed</span>` : ''}
           ${failed > 0 ? `<span class="file-group-stat failed">${failed} failed</span>` : ''}
@@ -603,7 +614,7 @@ function generateNetworkLogsSection(networkLogs: NetworkLogData, cardId: string)
           <span class="network-status ${statusClass}">${entry.status}</span>
           <span class="network-duration ${isSlowRequest ? 'slow' : ''}">${entry.duration}ms</span>
           <span class="network-size">${formatBytes(entry.responseSize)}</span>
-          <span class="network-expand-icon">▶</span>
+          <span class="network-expand-icon">${icon('chevron-right', 14)}</span>
         </div>
         <div class="network-entry-details" id="${entryId}-details" style="display: none;">
           ${timingBars}
@@ -630,7 +641,7 @@ function generateNetworkLogsSection(networkLogs: NetworkLogData, cardId: string)
   return `
     <div class="detail-section network-logs-section">
       <div class="detail-label">
-        <span class="icon">🌐</span> Network Logs
+        <span class="icon">${icon('globe')}</span> Network Logs
         <span class="network-summary">
           ${totalRequests} requests
           ${errorCount > 0 ? `<span class="network-error-count">${errorCount} errors</span>` : ''}

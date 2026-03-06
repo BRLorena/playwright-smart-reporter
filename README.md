@@ -1,38 +1,30 @@
 # playwright-smart-reporter
 
-![Let's Build QA](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/lets-build-qa-banner.png)
+An intelligent Playwright HTML reporter with AI-powered failure analysis, flakiness detection, performance regression alerts, and a modern interactive dashboard. Free + Starter + Pro tiers — same npm package, paid features unlock with a license key.
 
-An intelligent Playwright HTML reporter with AI-powered failure analysis, flakiness detection, performance regression alerts, and a modern interactive dashboard.
-
-![Report Overview](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/report-overview-v1.png)
-_Dashboard featuring: sidebar navigation, suite health grade, attention-based filtering, failure clusters, quick insights, and interactive trend charts_
+![Report Overview](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/report-overview-dark.png)
+_Dashboard with quality gates, quarantine, suite health grade, attention alerts, and failure clusters_
 
 ## Installation
 
 ```bash
-# Node.js / Playwright
 npm install -D playwright-smart-reporter
-
-# Python / pytest
-pip install playwright-smart-reporter-python
 ```
-
-For Python usage, see the [Python README](./python/README.md).
 
 ## Quick Start
 
 Add to your `playwright.config.ts`:
 
 ```typescript
-import { defineConfig } from '@playwright/test';
+import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   reporter: [
     [
-      'playwright-smart-reporter',
+      "playwright-smart-reporter",
       {
-        outputFile: 'smart-report.html',
-        historyFile: 'test-history.json',
+        outputFile: "smart-report.html",
+        historyFile: "test-history.json",
         maxHistoryRuns: 10,
       },
     ],
@@ -40,58 +32,275 @@ export default defineConfig({
 });
 ```
 
+Run your tests and open the generated `smart-report.html`.
+
+## Free vs Paid
+
+The free tier includes everything you need for local test reporting. Paid plans add AI failure analysis, premium themes, PDF exports, quality gates, and more — activated with a license key.
+
+| Feature                                                    | Local (Free) | Starter (£5/mo) | Pro (£9/mo) |
+| ---------------------------------------------------------- | :----------: | :-------------: | :---------: |
+| Stability grades (A–F) so you know which tests to trust    |      ✅      |       ✅        |     ✅      |
+| Flakiness detection across retries and history             |      ✅      |       ✅        |     ✅      |
+| Run-to-run comparison — catch regressions before they ship |      ✅      |       ✅        |     ✅      |
+| Screenshot, video, and trace gallery for every failure     |      ✅      |       ✅        |     ✅      |
+| Network request logs to pinpoint API issues                |      ✅      |       ✅        |     ✅      |
+| CI auto-detection & notifications                          |      ✅      |       ✅        |     ✅      |
+| Live progress dashboard — watch results as tests execute   |      ✅      |       ✅        |     ✅      |
+| 4 built-in themes to match your workflow                   |      ✅      |       ✅        |     ✅      |
+| Run, cancel, and filter tests from the live dashboard      |              |       ✅        |     ✅      |
+| AI-powered root cause analysis                             |              |    2,000/mo     |  5,000/mo   |
+| 6 premium themes (Ocean, Sunset, Dracula, and more)        |              |       ✅        |     ✅      |
+| Share polished PDF reports with stakeholders               |              |       ✅        |     ✅      |
+| Export to JSON and JUnit XML for CI/CD pipelines           |              |       ✅        |     ✅      |
+| Quality gates — block merges when quality drops            |              |       ✅        |     ✅      |
+| Auto-quarantine unreliable tests to keep CI green          |              |       ✅        |     ✅      |
+| Brand reports with your logo and team name                 |              |       ✅        |     ✅      |
+| Fully custom theme colours to match your brand             |              |                 |     ✅      |
+| AI health summary — executive overview of suite quality    |              |       ✅        |     ✅      |
+| Priority email support — direct access to the team         |              |                 |     ✅      |
+
+**Get a license at [stagewright.dev](https://stagewright.dev)**
+
+### Activating a License
+
+Set your license key via environment variable or config:
+
+```bash
+# Environment variable
+export SMART_REPORTER_LICENSE_KEY=your-license-key
+```
+
+```typescript
+// Or in playwright.config.ts
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: "your-license-key",
+    },
+  ],
+];
+```
+
 ## Features
 
 ### Core Analysis
 
-- **AI Failure Analysis** — Claude/OpenAI/Gemini-powered fix suggestions with batched analysis for large suites
+- **AI Failure Analysis** — AI-powered fix suggestions via managed proxy — no API keys required
 - **Flakiness Detection** — Historical tracking to identify unreliable tests (not single-run retries)
 - **Performance Regression Alerts** — Warns when tests get significantly slower than average
-- **Stability Scoring** — Composite health metrics (0-100 with grades A+ to F)
+- **Stability Scoring** — Composite health metrics (0-100 with grades A to F)
 - **Failure Clustering** — Group similar failures by error type with error previews and AI analysis
 - **Test Retry Analysis** — Track tests that frequently need retries
 
 ### Interactive Dashboard
 
 - **Sidebar Navigation** — Overview, Tests, Trends, Comparison, Gallery views
-- **Theme Support** — Light, dark, and system theme with persistent preference
+- **Theme Support** — 4 built-in themes (System, Light, Dark, High Contrast) with persistent preference
 - **Keyboard Shortcuts** — `1-5` switch views, `j/k` navigate tests, `f` focus search, `e` export summary
 - **Virtual Scroll** — Pagination for large test suites (500+ tests)
 - **Exportable Summary Card** — One-click export of test run summary
 
-### Step Timeline (v1.0.8)
-
-- **Flamechart Visualisation** — Colour-coded timeline bars showing step-level timing
-- **Categories** — Navigation (blue), Assertion (green), Action (purple), API (amber), Wait (grey)
-- **Step Filtering** — `filterPwApiSteps: true` hides verbose `pw:api` internal steps
-
-### Enhanced Trend Charts (v1.0.8)
-
-- **Moving Averages** — Overlay on pass rate and duration trends
-- **Anomaly Detection** — 2-sigma outlier detection with visual markers
-- **Clickable History** — Click any chart bar to drill into that historical run
-
-### CI Environment Detection (v1.0.8)
-
-- **Auto-detect** — GitHub Actions, GitLab CI, CircleCI, Jenkins, Azure DevOps, Buildkite
-- **Report Header** — Displays branch, commit SHA, and build ID automatically
-- **External Run ID** — `runId` option for consistent history across sharded CI runs
-
 ### Test Details
 
+![Test Expanded](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/test-expanded-dark.png)
+_Expanded test card with step timeline, network logs, run history, and quarantine badge_
+
 - **Step Timing Breakdown** — Visual bars highlighting the slowest steps
+- **Flamechart Visualisation** — Colour-coded timeline bars (navigation, assertion, action, API, wait)
 - **Network Logs** — API calls with status codes, timing, and payload details (from trace files)
 - **Inline Trace Viewer** — View traces directly in the dashboard
 - **Screenshot Embedding** — Failure screenshots displayed inline
 - **Browser & Project Badges** — Shows which browser/project each test ran against
 - **Annotation Support** — `@slow`, `@fixme`, `@skip`, `@issue`, custom annotations with styled badges
 
-### Integration
+### Trend Analytics
 
-- **Slack/Teams Notifications** — Webhook alerts on failures
-- **Merge History CLI** — Combine parallel CI run histories
-- **Local Report Server** — `npx playwright-smart-reporter-serve report.html` with trace viewer support
-- **JSON Export** — Download results for external processing
+![Trend Charts](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/trends-dark.png)
+_Interactive trend charts with pass rate, duration, flaky tests, and slow test tracking_
+
+- **Moving Averages** — Overlay on pass rate and duration trends
+- **Anomaly Detection** — 2-sigma outlier detection with visual markers
+- **Clickable History** — Click any chart bar to drill into that historical run
+
+### Artifact Gallery
+
+![Gallery View](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/gallery-dark.png)
+_Visual grid of screenshots, videos, and trace files_
+
+### Trace Viewer
+
+![Tests View](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/tests-view-dark.png)
+_Test list with status badges, stability grades, quarantine indicators, and filtering_
+
+### Flakiness Detection
+
+![Comparison View](https://raw.githubusercontent.com/qa-gary-parker/playwright-smart-reporter/master/images/comparison-dark.png)
+_Run comparison showing new failures, performance changes, and baseline diffs_
+
+Smart Reporter tracks flakiness **across runs**, not within a single run:
+
+|              | Playwright HTML Report     | Smart Reporter                       |
+| ------------ | -------------------------- | ------------------------------------ |
+| **Scope**    | Single test run            | Historical across multiple runs      |
+| **Criteria** | Fails then passes on retry | Failed 30%+ of the time historically |
+| **Use Case** | Immediate retry success    | Chronically unreliable tests         |
+
+Indicators:
+
+- **Stable** (<10% failure rate) — **Unstable** (10-30%) — **Flaky** (>30%) — **New** (no history)
+
+## Starter Features
+
+### Themes
+
+6 additional themes beyond the 4 built-in themes (System, Light, Dark, High Contrast): **Ocean**, **Sunset**, **Dracula**, **Cyberpunk**, **Forest**, and **Rose**. Set via config:
+
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
+      theme: { preset: "dracula" }, // ocean, sunset, dracula, cyberpunk, forest, rose
+    },
+  ],
+];
+```
+
+### Executive PDF Export
+
+Generate professional PDF reports in 3 themed variants: **Corporate**, **Minimal**, and **Dark**. Includes a style picker modal in the HTML report.
+
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
+      exportPdf: true,
+    },
+  ],
+];
+```
+
+### Quality Gates
+
+Fail CI builds when test results don't meet your thresholds:
+
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
+      qualityGates: {
+        minPassRate: 95,
+        maxFlakyRate: 5,
+        minStabilityGrade: "B",
+      },
+    },
+  ],
+];
+```
+
+Or run as a standalone CLI check:
+
+```bash
+npx playwright-smart-reporter gate --min-pass-rate 95 --max-flaky-rate 5
+```
+
+Exit codes: `0` = all gates passed, `1` = gate failed (use in CI to block deploys).
+
+### Flaky Test Quarantine
+
+Automatically detect and quarantine chronically flaky tests. Quarantined tests are tracked in a JSON file and can be excluded from gate failures:
+
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
+      quarantine: {
+        enabled: true,
+        outputFile: ".smart-quarantine.json",
+        threshold: 0.3, // flakiness score 0-1
+      },
+    },
+  ],
+];
+```
+
+### Custom Branding
+
+Customise the report title, footer, and theme colours:
+
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
+      branding: {
+        title: "Acme Corp Test Report",
+        footer: "Generated by QA Team",
+      },
+      theme: {
+        primary: "#6366f1",
+        accent: "#8b5cf6",
+        success: "#22c55e",
+        error: "#ef4444",
+        warning: "#f59e0b",
+      },
+    },
+  ],
+];
+```
+
+### JSON & JUnit Export
+
+Export test results in structured formats for external tools:
+
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
+      exportJson: true,
+      exportJunit: true,
+    },
+  ],
+];
+```
+
+### AI Suite Health Summary
+
+An AI-generated executive summary appears at the top of the Overview tab, combining failure clusters, flakiness trends, performance regressions, and historical pass rate data into natural-language insights. Enabled by default for Starter and Pro users.
+
+To disable (e.g., to preserve AI quota):
+
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      outputFile: "smart-report.html",
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
+      enableAISuiteHealth: false, // Disable AI health summary (saves 1 AI request per run)
+    },
+  ],
+];
+```
 
 ## Configuration
 
@@ -100,13 +309,16 @@ export default defineConfig({
 ```typescript
 reporter: [
   [
-    'playwright-smart-reporter',
+    "playwright-smart-reporter",
     {
       // Core
-      outputFile: 'smart-report.html',
-      historyFile: 'test-history.json',
+      outputFile: "smart-report.html",
+      historyFile: "test-history.json",
       maxHistoryRuns: 10,
       performanceThreshold: 0.2,
+
+      // Pro license
+      licenseKey: process.env.SMART_REPORTER_LICENSE_KEY,
 
       // Notifications
       slackWebhook: process.env.SLACK_WEBHOOK_URL,
@@ -121,33 +333,32 @@ reporter: [
       enableAIRecommendations: true,
       enableTrendsView: true,
       enableTraceViewer: true,
-      enableHistoryDrilldown: false, // default: false
+      enableHistoryDrilldown: false,
+      enableAISuiteHealth: true, // AI health summary in Overview tab (Starter+, uses 1 AI request)
       enableNetworkLogs: true,
 
       // Step and path options
-      filterPwApiSteps: false, // Hide pw:api steps
-      relativeToCwd: false, // Paths relative to cwd instead of rootDir
+      filterPwApiSteps: false,
+      relativeToCwd: false,
 
       // Multi-project
-      projectName: 'ui-tests', // Isolate history per project
-      runId: process.env.GITHUB_RUN_ID, // Consistent ID across CI shards
+      projectName: "ui-tests",
+      runId: process.env.GITHUB_RUN_ID,
 
       // Network logging
-      networkLogFilter: 'api.example.com',
+      networkLogFilter: "api.example.com",
       networkLogExcludeAssets: true,
       networkLogMaxEntries: 50,
 
       // Thresholds
       stabilityThreshold: 70,
       retryFailureThreshold: 3,
-      baselineRunId: 'main-branch-baseline',
-
-      // Configurable thresholds (v1.0.8)
+      baselineRunId: "main-branch-baseline",
       thresholds: {
-        flakinessStable: 0.1, // Below this = stable
-        flakinessUnstable: 0.3, // Below this = unstable, above = flaky
-        performanceRegression: 0.2, // 20% slower triggers regression
-        stabilityWeightFlakiness: 0.4, // Must sum to 1.0
+        flakinessStable: 0.1,
+        flakinessUnstable: 0.3,
+        performanceRegression: 0.2,
+        stabilityWeightFlakiness: 0.4,
         stabilityWeightPerformance: 0.3,
         stabilityWeightReliability: 0.3,
         gradeA: 90,
@@ -156,19 +367,24 @@ reporter: [
         gradeD: 60,
       },
 
+      // Pro features
+      theme: { preset: "default" }, // default, light, dark, high-contrast, ocean, sunset, dracula, cyberpunk, forest, rose
+      exportPdf: false,
+      exportJson: false,
+      exportJunit: false,
+      qualityGates: {}, // { minPassRate, maxFlakyRate, minStabilityGrade }
+      quarantine: {}, // { enabled, outputFile, threshold }
+      branding: {}, // { logo, title, footer, hidePoweredBy }
+
       // Advanced
-      cspSafe: false, // CSP-compliant mode (file refs instead of base64)
-      maxEmbeddedSize: 5 * 1024 * 1024, // Max bytes for inline base64 traces
+      cspSafe: false,
+      maxEmbeddedSize: 5 * 1024 * 1024,
 
-      // AI Provider selection (auto-detects by default)
-      aiProvider: 'copilot', // 'anthropic' | 'openai' | 'gemini' | 'copilot' | 'ollama'
-
-      // GitHub Copilot options (requires GITHUB_TOKEN env var)
-      copilotModel: 'claude-sonnet-4-20250514', // Default model via GitHub Models API
-
-      // Ollama (local LLM) options
-      ollamaBaseUrl: 'http://localhost:11434', // Default Ollama server URL
-      ollamaModel: 'codellama', // Any model pulled in Ollama
+      // Direct AI provider (no license required — alternative to managed proxy)
+      aiProvider: "copilot", // 'anthropic' | 'openai' | 'gemini' | 'copilot' | 'ollama' (auto-detects if unset)
+      copilotModel: "claude-sonnet-4-20250514", // GitHub Models API model (requires GITHUB_TOKEN)
+      ollamaBaseUrl: "http://localhost:11434", // Ollama server URL (default)
+      ollamaModel: "codellama", // Ollama model to use
     },
   ],
 ];
@@ -176,67 +392,22 @@ reporter: [
 
 ### AI Analysis
 
-Smart Reporter supports **5 AI providers** for failure analysis. Set the appropriate environment variable, or explicitly choose a provider with `aiProvider`.
-
-#### Cloud Providers
+AI failure analysis is a managed service powered by GPT-4o-mini via the StageWright proxy — no API keys required. To enable it, set your license key (Starter or Pro plan):
 
 ```bash
-export ANTHROPIC_API_KEY=your-key    # Claude (preferred)
-export OPENAI_API_KEY=your-key       # OpenAI
-export GEMINI_API_KEY=your-key       # Google Gemini
+export SMART_REPORTER_LICENSE_KEY=your-license-key
 ```
 
-#### GitHub Copilot
+Or add `licenseKey` to your reporter config. When a test fails, the reporter automatically sends the failure context to `https://stagewright.dev/api/ai/analyze` and returns fix suggestions in the report. Analysis quota depends on your plan:
 
-Use AI analysis through your existing GitHub Copilot subscription via the **GitHub Models API**. This is ideal for companies that only allow Copilot usage.
+- **Starter** (£5/mo): 2,000 AI analyses/month
+- **Pro** (£9/mo): 5,000 AI analyses/month
 
-```bash
-# Option 1: Use GitHub CLI token
-export GITHUB_TOKEN=$(gh auth token)
+The free tier does not include AI analysis.
 
-# Option 2: Use a Personal Access Token (needs 'copilot' scope)
-export GITHUB_TOKEN=ghp_your_token_here
-```
+### Direct AI Providers (no license required)
 
-```typescript
-reporter: [
-  [
-    'playwright-smart-reporter',
-    {
-      aiProvider: 'copilot',
-      copilotModel: 'claude-sonnet-4-20250514', // default (also supports 'gpt-4o', 'o1-preview', etc.)
-    },
-  ],
-];
-```
-
-#### Ollama (Local LLM)
-
-Run AI analysis entirely on your machine using [Ollama](https://ollama.ai) — no API keys, no data leaves your network.
-
-```bash
-# Install and start Ollama, then pull a model
-ollama pull codellama
-```
-
-```typescript
-reporter: [
-  [
-    'playwright-smart-reporter',
-    {
-      aiProvider: 'ollama',
-      ollamaModel: 'codellama', // or 'llama3.2', 'mistral', 'deepseek-coder', etc.
-      ollamaBaseUrl: 'http://localhost:11434', // optional, this is the default
-    },
-  ],
-];
-```
-
-**Recommended Ollama models for test analysis:** `codellama`, `deepseek-coder`, `llama3.2`, `mistral`
-
-#### Provider Priority
-
-When `aiProvider` is not set, the reporter auto-detects by checking environment variables in this order:
+Alternatively, use your own API keys to run AI analysis without a license. Set the appropriate environment variable and optionally choose a provider via `aiProvider`:
 
 | Priority | Provider  | Env Var             | Endpoint                          |
 | -------- | --------- | ------------------- | --------------------------------- |
@@ -246,41 +417,47 @@ When `aiProvider` is not set, the reporter auto-detects by checking environment 
 | 4        | Copilot   | `GITHUB_TOKEN`      | models.github.com                 |
 | 5        | Ollama    | _(none needed)_     | localhost:11434                   |
 
-## Report Views
+#### GitHub Copilot
 
-### Overview
+Use AI analysis through your existing GitHub Copilot subscription via the **GitHub Models API**:
 
-Pass rate ring, suite health grade (A+ to F), stat cards, attention-required highlights, failure clusters, and quick insights (slowest test, most flaky, distribution).
+```bash
+export GITHUB_TOKEN=$(gh auth token)
+# or export GITHUB_TOKEN=ghp_your_pat_with_copilot_scope
+```
 
-### Tests
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      aiProvider: "copilot",
+      copilotModel: "claude-sonnet-4-20250514", // default; also supports 'gpt-4o', 'o1-preview', etc.
+    },
+  ],
+];
+```
 
-Filter by status, health, grade, attention badges, suite, and tags. Search by name. Each card shows duration, stability grade, flakiness indicator, history dots (clickable for drilldown), and expandable details with steps, errors, screenshots, and AI suggestions.
+#### Ollama (Local LLM)
 
-### Trends
+Run AI analysis entirely on your machine — no API keys, no data sent externally:
 
-Interactive charts for pass rate, duration, flaky tests, and slow tests over time. Moving averages and anomaly markers. Click any bar to view that historical run.
+```bash
+ollama pull codellama   # or llama3.2, mistral, deepseek-coder, etc.
+```
 
-### Comparison
-
-Compare current run against a baseline: pass rate change, duration change, test count differences.
-
-### Gallery
-
-Visual grid of all test attachments — screenshots, videos, and trace files with status filtering.
-
-## Flakiness Detection
-
-Smart Reporter tracks flakiness **across runs**, not within a single run:
-
-|              | Playwright HTML Report     | Smart Reporter                       |
-| ------------ | -------------------------- | ------------------------------------ |
-| **Scope**    | Single test run            | Historical across multiple runs      |
-| **Criteria** | Fails then passes on retry | Failed 30%+ of the time historically |
-| **Use Case** | Immediate retry success    | Chronically unreliable tests         |
-
-Indicators:
-
-- **Stable** (<10% failure rate) — **Unstable** (10-30%) — **Flaky** (>30%) — **New** (no history)
+```typescript
+reporter: [
+  [
+    "playwright-smart-reporter",
+    {
+      aiProvider: "ollama",
+      ollamaModel: "codellama", // default
+      ollamaBaseUrl: "http://localhost:11434", // default
+    },
+  ],
+];
+```
 
 ## Stability Grades
 
@@ -288,18 +465,18 @@ Composite score (0-100) from three factors:
 
 | Factor      | Weight | Description                |
 | ----------- | ------ | -------------------------- |
-| Reliability | 40%    | Pass rate from history     |
-| Flakiness   | 35%    | Inverse of flakiness score |
-| Performance | 25%    | Execution time consistency |
+| Flakiness   | 40%    | Inverse of flakiness score |
+| Performance | 30%    | Execution time consistency |
+| Reliability | 30%    | Pass rate from history     |
 
-Grades: **A+** (95-100), **A** (90-94), **B** (80-89), **C** (70-79), **D** (60-69), **F** (<60). All weights and thresholds are configurable via `ThresholdConfig`.
+Grades: **A** (90-100), **B** (80-89), **C** (70-79), **D** (60-69), **F** (<60). All weights and thresholds are configurable.
 
 ## Step Filtering
 
 ```typescript
 reporter: [
   [
-    'playwright-smart-reporter',
+    "playwright-smart-reporter",
     {
       filterPwApiSteps: true, // Only show custom test.step() entries
     },
@@ -316,11 +493,10 @@ Isolate history per test suite to prevent metric contamination:
 ```typescript
 reporter: [
   [
-    'playwright-smart-reporter',
+    "playwright-smart-reporter",
     {
-      projectName: 'api',
-      historyFile: 'reports/{project}/history.json',
-      // Creates: reports/api/history.json
+      projectName: "api",
+      historyFile: "reports/{project}/history.json",
     },
   ],
 ];
@@ -356,32 +532,6 @@ use: {
 }
 ```
 
-## CSP-Safe Mode
-
-For environments with strict Content Security Policy:
-
-```typescript
-reporter: [['playwright-smart-reporter', { cspSafe: true }]];
-```
-
-Screenshots saved as separate files instead of base64, system fonts instead of Google Fonts, file references instead of embedded data. Smaller report size but requires the entire report directory to be shared.
-
-## History Drilldown
-
-```typescript
-reporter: [
-  [
-    'playwright-smart-reporter',
-    {
-      enableHistoryDrilldown: true,
-      maxHistoryRuns: 10,
-    },
-  ],
-];
-```
-
-Click history dots on any test card to view results from previous runs. Stores JSON snapshots in `history-runs/` (~1-5KB per test per run).
-
 ## Annotations
 
 | Annotation        | Badge  | Annotation        | Badge  |
@@ -392,9 +542,9 @@ Click history dots on any test card to view results from previous runs. Stores J
 | `@todo`           | Blue   | Custom            | Grey   |
 
 ```typescript
-test('payment flow', async ({ page }) => {
-  test.slow(); // Shows amber @slow badge
-  test.info().annotations.push({ type: 'issue', description: 'JIRA-123' });
+test("payment flow", async ({ page }) => {
+  test.slow();
+  test.info().annotations.push({ type: "issue", description: "JIRA-123" });
 });
 ```
 
@@ -451,7 +601,7 @@ steps:
   - task: Cache@2
     inputs:
       key: 'test-history | "$(Build.SourceBranchName)"'
-      restoreKeys: 'test-history |'
+      restoreKeys: "test-history |"
       path: test-history.json
 
   - script: npx playwright test
@@ -468,6 +618,17 @@ steps:
 
 The reporter automatically detects GitHub Actions, GitLab CI, CircleCI, Jenkins, Azure DevOps, and Buildkite. Branch, commit SHA, and build ID are displayed in the report header.
 
+### Quality Gates in CI
+
+```yaml
+# GitHub Actions example
+- run: npx playwright test
+  continue-on-error: true
+
+- run: npx playwright-smart-reporter gate --min-pass-rate 95 --max-flaky-rate 5
+  # Exits non-zero if gates fail — blocks the pipeline
+```
+
 ### Sharded Runs
 
 For consistent history across parallel shards, set `runId`:
@@ -475,7 +636,7 @@ For consistent history across parallel shards, set `runId`:
 ```typescript
 reporter: [
   [
-    'playwright-smart-reporter',
+    "playwright-smart-reporter",
     {
       runId: process.env.GITHUB_RUN_ID,
     },
@@ -493,46 +654,52 @@ npx playwright-smart-reporter-merge-history \
   --max-runs 10
 ```
 
-## Multi-Browser Support
+## CSP-Safe Mode
 
-Browser and project badges are automatically displayed for multi-project configs:
+For environments with strict Content Security Policy (e.g., Jenkins):
 
 ```typescript
-export default defineConfig({
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
-  reporter: [['playwright-smart-reporter']],
-});
+reporter: [["playwright-smart-reporter", { cspSafe: true }]];
 ```
+
+When enabled, the reporter generates companion `.css` and `.js` files alongside the HTML report. The HTML references these via `<link rel="stylesheet">` and `<script src defer>` instead of inline `<style>` and `<script>` tags. Report data is embedded in `<script type="application/json">` tags (not executed by the browser). System fonts are used instead of Google Fonts.
+
+**Jenkins CSP configuration** — Add to Jenkins script console or startup:
+
+```
+System.setProperty("hudson.model.DirectoryBrowserSupport.CSP",
+  "script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self';")
+```
+
+> **Note**: Inline event handlers (`onclick`, etc.) still require `'unsafe-inline'` in `script-src`. Full event delegation is planned for a future release.
 
 ## Cucumber Integration
 
 Works with Playwright + Cucumber frameworks:
 
 ```typescript
-import { defineBddConfig } from 'playwright-bdd';
+import { defineBddConfig } from "playwright-bdd";
 
 const testDir = defineBddConfig({
-  features: 'features/**/*.feature',
-  steps: 'steps/**/*.ts',
+  features: "features/**/*.feature",
+  steps: "steps/**/*.ts",
 });
 
 export default defineConfig({
   testDir,
-  reporter: [['playwright-smart-reporter']],
+  reporter: [["playwright-smart-reporter"]],
 });
 ```
 
-Feature file names appear as test file paths, scenario names as test titles, and tags are captured.
-
 ## FAQ
 
-### Does Smart Reporter support Python/pytest?
+### How do I get a license?
 
-**Yes.** Install via `pip install playwright-smart-reporter-python`. See the [Python README](./python/README.md) for details. Node.js 18+ is required at runtime.
+Visit [stagewright.dev](https://stagewright.dev) to purchase a Starter (£5/mo) or Pro (£9/mo) plan. Your license key is delivered via email immediately after purchase.
+
+### Does Smart Reporter work without a license key?
+
+Yes. All core features (flakiness detection, stability grades, trend analytics, trace viewer, gallery, etc.) are free. AI failure analysis, premium themes, and other paid features unlock when you add a license key.
 
 ### RangeError with large test suites?
 
@@ -548,20 +715,21 @@ Enable `cspSafe: true` to save attachments as files instead of embedding, or red
 
 ## Troubleshooting
 
-| Problem               | Cause                              | Fix                                                            |
-| --------------------- | ---------------------------------- | -------------------------------------------------------------- |
-| No history data       | History file missing or wrong path | Check `historyFile` path, use CI caching                       |
-| No network logs       | Tracing not enabled                | Add `trace: 'retain-on-failure'` to config                     |
-| No AI suggestions     | Missing API key                    | Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` |
-| Mixed project metrics | Shared history file                | Use `projectName` to isolate                                   |
-| Wrong path resolution | Relative to rootDir                | Enable `relativeToCwd: true`                                   |
+| Problem                      | Cause                              | Fix                                                                                                   |
+| ---------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| No history data              | History file missing or wrong path | Check `historyFile` path, use CI caching                                                              |
+| No network logs              | Tracing not enabled                | Add `trace: 'retain-on-failure'` to config                                                            |
+| No AI suggestions            | Missing or invalid license key     | Set `SMART_REPORTER_LICENSE_KEY` env var or add `licenseKey` to config (Starter or Pro plan required) |
+| Mixed project metrics        | Shared history file                | Use `projectName` to isolate                                                                          |
+| Starter features not showing | License key missing or expired     | Check `SMART_REPORTER_LICENSE_KEY` env var or `licenseKey` config                                     |
+| Quality gate not failing CI  | Gate not run as separate step      | Run `npx playwright-smart-reporter gate` as its own CI step                                           |
 
 ## Development
 
 ```bash
 npm install
 npm run build
-npm test        # 210 tests
+npm test        # 666 tests
 npm run test:demo
 ```
 
@@ -573,4 +741,4 @@ npm run test:demo
 
 ## License
 
-MIT
+MIT — free and paid features in one package. Starter and Pro features require a valid license key from [stagewright.dev](https://stagewright.dev).

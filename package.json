@@ -1,16 +1,31 @@
 {
   "name": "playwright-smart-reporter",
-  "version": "1.0.8",
+  "version": "1.6.4",
   "description": "An intelligent Playwright HTML reporter with AI-powered failure analysis, flakiness detection, and performance regression alerts",
   "main": "dist/smart-reporter.js",
   "types": "dist/smart-reporter.d.ts",
   "bin": {
     "playwright-smart-reporter-merge-history": "./dist/bin/merge-history.js",
     "playwright-smart-reporter-view-trace": "./dist/bin/view-trace.js",
-    "playwright-smart-reporter-serve": "./dist/bin/serve.js"
+    "playwright-smart-reporter-serve": "./dist/bin/serve.js",
+    "playwright-smart-reporter": "./dist/bin/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/smart-reporter.d.ts",
+      "default": "./dist/smart-reporter.js"
+    },
+    "./quarantine": {
+      "types": "./dist/quarantine/quarantine-helper.d.ts",
+      "default": "./dist/quarantine/quarantine-helper.js"
+    }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/*.test.js.map",
+    "!dist/license/generate-license.*"
   ],
   "scripts": {
     "build": "tsc",
@@ -32,7 +47,11 @@
     "test-stability",
     "retry-analysis",
     "failure-clustering",
-    "trace-viewer"
+    "trace-viewer",
+    "quality-gates",
+    "pdf-export",
+    "test-quarantine",
+    "ci-cd"
   ],
   "author": "Gary Parker",
   "contributors": [
@@ -48,27 +67,31 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gary-parker/playwright-smart-reporter.git"
+    "url": "https://github.com/qa-gary-parker/playwright-smart-reporter.git"
   },
-  "homepage": "https://github.com/gary-parker/playwright-smart-reporter#readme",
+  "homepage": "https://github.com/qa-gary-parker/playwright-smart-reporter#readme",
   "bugs": {
-    "url": "https://github.com/gary-parker/playwright-smart-reporter/issues"
+    "url": "https://github.com/qa-gary-parker/playwright-smart-reporter/issues"
   },
   "peerDependencies": {
-    "@playwright/test": ">=1.40.0"
+    "@playwright/test": ">=1.40.0",
+    "playwright-core": ">=1.40.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
     "@types/adm-zip": "^0.5.7",
+    "@types/pdfkit": "^0.13.8",
+    "@vitest/coverage-v8": "^2.1.9",
     "typescript": "^5.3.0",
     "vitest": "^2.1.0"
   },
-  "optionalDependencies": {
-    "@anthropic-ai/sdk": "^0.32.0",
-    "openai": "^4.70.0"
-  },
   "dependencies": {
     "adm-zip": "^0.5.16",
-    "dotenv": "^17.2.3"
+    "pdfkit": "^0.16.0"
   }
 }

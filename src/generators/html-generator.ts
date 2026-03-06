@@ -5,14 +5,21 @@
  * REDESIGNED: Modern app-shell layout with sidebar, top bar, and master-detail view
  */
 
-import type { TestResultData, TestHistory, RunComparison, RunSnapshotFile, SmartReporterOptions, FailureCluster, CIInfo } from '../types';
-import { formatDuration, escapeHtml, sanitizeId } from '../utils';
+import type { TestResultData, TestHistory, RunComparison, RunSnapshotFile, SmartReporterOptions, FailureCluster, CIInfo, LicenseTier, ThemeConfig, BrandingConfig, QualityGateResult, QualityGateRuleResult, QuarantineEntry } from '../types';
+import { formatDuration, escapeHtml, escapeJsString, sanitizeId, renderMarkdownLite } from '../utils';
 import { generateTrendChart } from './chart-generator';
 import { generateGroupedTests, generateTestCard, AttentionSets } from './card-generator';
 import { generateGallery, generateGalleryScript } from './gallery-generator';
+import { icon } from './icon-provider';
 import { generateComparison, generateComparisonScript } from './comparison-generator';
 // Issue #13: Inline trace viewer integration
 import { generateJSZipScript, generateTraceViewerHtml, generateTraceViewerStyles, generateTraceViewerScript } from './trace-viewer-generator';
+
+export interface GeneratedReport {
+  html: string;
+  css?: string;
+  js?: string;
+}
 
 export interface HtmlGeneratorData {
   results: TestResultData[];
@@ -23,6 +30,13 @@ export interface HtmlGeneratorData {
   historyRunSnapshots?: Record<string, RunSnapshotFile>;
   failureClusters?: FailureCluster[];
   ciInfo?: CIInfo;
+  licenseTier?: LicenseTier;
+  outputBasename?: string;
+  qualityGateResult?: QualityGateResult;
+  quarantinedTestIds?: Set<string>;
+  quarantineEntries?: QuarantineEntry[];
+  quarantineThreshold?: number;
+  aiSuiteHealthSummary?: string;
 }
 
 /**
@@ -46,8 +60,8 @@ function generateFileTree(results: TestResultData[]): string {
     const statusClass = stats.failed > 0 ? 'has-failures' : 'all-passed';
     const fileName = file.split(/[\\/]/).pop() || file;
     return `
-      <div class="file-tree-item ${statusClass}" data-file="${escapeHtml(file)}" onclick="filterByFile('${escapeHtml(file)}')">
-        <span class="file-tree-icon">📄</span>
+      <div class="file-tree-item ${statusClass}" data-file="${escapeHtml(file)}" onclick="filterByFile('${escapeJsString(file)}')">
+        <span class="file-tree-icon">${icon('file')}</span>
         <span class="file-tree-name" title="${escapeHtml(file)}">${escapeHtml(fileName)}</span>
         <span class="file-tree-stats">
           ${stats.passed > 0 ? `<span class="file-stat passed">${stats.passed}</span>` : ''}
@@ -61,14 +75,15 @@ function generateFileTree(results: TestResultData[]): string {
 /**
  * Generate test list items for the main panel
  */
-function generateTestListItems(results: TestResultData[], showTraceSection: boolean, attention: AttentionSets = { newFailures: new Set(), regressions: new Set(), fixed: new Set() }): string {
+function generateTestListItems(results: TestResultData[], showTraceSection: boolean, attention: AttentionSets = { newFailures: new Set(), regressions: new Set(), fixed: new Set() }, quarantinedTestIds?: Set<string>): string {
   return results.map(test => {
     const cardId = sanitizeId(test.testId);
     const statusClass = test.status === 'passed' ? 'passed' : test.status === 'skipped' ? 'skipped' : 'failed';
-    const isFlaky = test.flakinessScore !== undefined && test.flakinessScore >= 0.3;
+    const isFlaky = (test.flakinessScore !== undefined && test.flakinessScore >= 0.3) || test.outcome === 'flaky';
     const isSlow = test.performanceTrend?.startsWith('↑') || false;
     const isNew = test.flakinessIndicator?.includes('New') || false;
-    
+    const isQuarantined = quarantinedTestIds?.has(test.testId) ?? false;
+
     // Attention states from comparison
     const isNewFailure = attention.newFailures.has(test.testId);
     const isRegression = attention.regressions.has(test.testId);
@@ -102,6 +117,7 @@ function generateTestListItems(results: TestResultData[], showTraceSection: bool
            data-tags="${test.tags?.join(',') || ''}"
            data-suite="${test.suite || ''}"
            data-suites="${test.suites?.join(',') || ''}"
+           data-quarantined="${isQuarantined}"
            onclick="selectTest('${cardId}')"
            tabindex="0"
            onkeydown="if(event.key==='Enter')selectTest('${cardId}')">
@@ -113,6 +129,7 @@ function generateTestListItems(results: TestResultData[], showTraceSection: bool
           <div class="test-item-file">${escapeHtml(test.file)}</div>
         </div>
         <div class="test-item-meta">
+          ${isQuarantined ? '<span class="test-item-badge quarantined">Quarantined</span>' : ''}
           ${isNewFailure ? '<span class="test-item-badge new-failure">New Failure</span>' : ''}
           ${isRegression ? '<span class="test-item-badge regression">Regression</span>' : ''}
           ${isFixed ? '<span class="test-item-badge fixed">Fixed</span>' : ''}
@@ -125,6 +142,67 @@ function generateTestListItems(results: TestResultData[], showTraceSection: bool
       </div>
     `;
   }).join('');
+}
+
+/**
+ * Generate a background SVG area sparkline with gradient fill.
+ * Positioned absolutely behind card content as a subtle visual.
+ * Returns empty string if fewer than 2 data points.
+ */
+function generateSparkline(values: number[], color: string, gradientId: string, fixedMin?: number, fixedMax?: number): string {
+  if (values.length < 2) return '';
+
+  const W = 200;
+  const H = 60;
+  const padX = 0;
+  const padTop = 10;
+  const padBottom = 8;
+  const n = values.length;
+  const min = fixedMin ?? Math.min(...values);
+  const max = fixedMax ?? Math.max(...values);
+  const range = max - min || 1;
+
+  const points: [number, number][] = values.map((v, i) => [
+    padX + (i / (n - 1)) * (W - 2 * padX),
+    (H - padBottom) - ((v - min) / range) * (H - padTop - padBottom),
+  ]);
+
+  // Monotone cubic interpolation — compute tangents
+  const tangents: [number, number][] = points.map((_, i) => {
+    if (i === 0) return [points[1][0] - points[0][0], points[1][1] - points[0][1]];
+    if (i === n - 1) return [points[n - 1][0] - points[n - 2][0], points[n - 1][1] - points[n - 2][1]];
+    return [(points[i + 1][0] - points[i - 1][0]) / 2, (points[i + 1][1] - points[i - 1][1]) / 2];
+  });
+
+  // Build cubic bezier path segments (clamp control points to plot area)
+  const spkYMin = padTop;
+  const spkYMax = H - padBottom;
+  const clampSpkY = (y: number) => Math.max(spkYMin, Math.min(spkYMax, y));
+
+  let linePath = `M${points[0][0].toFixed(1)},${points[0][1].toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = points[i], p1 = points[i + 1];
+    const t0 = tangents[i], t1 = tangents[i + 1];
+    const cp1x = p0[0] + t0[0] / 3;
+    const cp1y = clampSpkY(p0[1] + t0[1] / 3);
+    const cp2x = p1[0] - t1[0] / 3;
+    const cp2y = clampSpkY(p1[1] - t1[1] / 3);
+    linePath += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
+  }
+
+  const areaPath = `${linePath} L${points[n - 1][0].toFixed(1)},${H} L${points[0][0].toFixed(1)},${H} Z`;
+
+  return `
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="sparkline-bg">
+        <defs>
+          <linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${color}" stop-opacity="0.25"/>
+            <stop offset="100%" stop-color="${color}" stop-opacity="0.03"/>
+          </linearGradient>
+        </defs>
+        <path d="${areaPath}" fill="url(#${gradientId})" />
+        <path d="${linePath}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.4" />
+      </svg>`;
 }
 
 /**
@@ -143,7 +221,12 @@ function generateOverviewContent(
   total: number,
   passRate: number,
   totalDuration: number,
-  history: TestHistory
+  history: TestHistory,
+  qualityGateResult?: QualityGateResult,
+  quarantineEntries?: QuarantineEntry[],
+  quarantineThreshold?: number,
+  licenseTier?: LicenseTier,
+  aiSuiteHealthSummary?: string,
 ): string {
   // Calculate deltas from comparison
   const prevPassed = comparison?.baselineRun.passed ?? passed;
@@ -172,17 +255,20 @@ function generateOverviewContent(
   const slowestTest = [...results].sort((a, b) => b.duration - a.duration)[0];
   const mostFlakyTest = [...results].filter(r => r.flakinessScore !== undefined).sort((a, b) => (b.flakinessScore ?? 0) - (a.flakinessScore ?? 0))[0];
 
-  // Pass rate sparkline from history
-  const passRateHistory = (history.summaries ?? []).slice(-10).map(s => {
-    const rate = s.total > 0 ? Math.round((s.passed / s.total) * 100) : 0;
-    return { rate, passed: s.passed, failed: s.failed };
-  });
+  // Pass rate sparkline from history + current run
+  const passRateHistory = [
+    ...(history.summaries ?? []).slice(-10).map(s => {
+      const rate = s.total > 0 ? Math.round((s.passed / s.total) * 100) : 0;
+      return { rate, passed: s.passed, failed: s.failed };
+    }),
+    { rate: passRate, passed, failed },
+  ];
 
   // Generate failure clusters section
   const clustersHtml = (failureClusters && failureClusters.length > 0) ? `
     <div class="overview-section">
       <div class="section-header">
-        <span class="section-icon">🔍</span>
+        <span class="section-icon">${icon('search')}</span>
         <span class="section-title">Failure Clusters</span>
       </div>
       <div class="failure-clusters-grid">
@@ -193,7 +279,7 @@ function generateOverviewContent(
           return `
           <div class="cluster-card" onclick="filterTests('failed'); switchView('tests');">
             <div class="cluster-header">
-              <div class="cluster-icon">⚠️</div>
+              <div class="cluster-icon">${icon('alert-triangle')}</div>
               <div class="cluster-type">${escapeHtml(cluster.errorType)}</div>
               <div class="cluster-count">${cluster.count} test${cluster.count > 1 ? 's' : ''}</div>
             </div>
@@ -217,7 +303,7 @@ function generateOverviewContent(
   const attentionHtml = hasAttentionItems ? `
     <div class="overview-section attention-section">
       <div class="section-header">
-        <span class="section-icon">⚡</span>
+        <span class="section-icon">${icon('zap')}</span>
         <span class="section-title">Attention Required</span>
       </div>
       <div class="attention-grid">
@@ -253,7 +339,191 @@ function generateOverviewContent(
     </div>
   ` : '';
 
+  // Quality Gates card
+  const hasPro = licenseTier !== undefined && licenseTier !== 'community';
+  const ruleLabels: Record<string, string> = {
+    maxFailures: 'Max failures',
+    minPassRate: 'Min pass rate',
+    maxFlakyRate: 'Max flaky rate',
+    minStabilityGrade: 'Min stability grade',
+    noNewFailures: 'No new failures',
+  };
+
+  const qualityGatesHtml = qualityGateResult ? `
+    <div class="overview-section quality-gate-section">
+      <div class="quality-gate-card ${qualityGateResult.passed ? 'gate-passed' : 'gate-failed'}">
+        ${generateSparkline(passRateHistory.map(h => h.rate), '#22c55e', 'sparkGradGate', 0, 100)}
+        <div class="gate-header">
+          <div class="gate-title-row">
+            <span class="section-icon">${icon('gauge')}</span>
+            <span class="gate-title">Quality Gates</span>
+          </div>
+          <span class="gate-status ${qualityGateResult.passed ? 'gate-status-passed' : 'gate-status-failed'}">${qualityGateResult.passed ? 'PASSED' : 'FAILED'}</span>
+        </div>
+        <div class="gate-rules">
+          ${qualityGateResult.rules.map(rule => {
+            const ruleIcon = rule.skipped ? icon('circle', 14) : rule.passed ? icon('check', 14) : icon('x', 14);
+            const iconClass = rule.skipped ? 'gate-skipped' : rule.passed ? 'gate-pass' : 'gate-fail';
+            const label = ruleLabels[rule.rule] || rule.rule;
+            return `
+            <div class="gate-rule-row">
+              <span class="gate-rule-icon ${iconClass}">${ruleIcon}</span>
+              <span class="gate-rule-name">${escapeHtml(label)}</span>
+              <span class="gate-rule-values">${rule.skipped ? '(skipped)' : `${escapeHtml(rule.actual)} ${escapeHtml(rule.threshold)}`}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+  ` : (!hasPro ? `
+    <div class="overview-section quality-gate-section">
+      <div class="quality-gate-card pro-feature-placeholder gated-clickable" onclick="showUpgradeModal('Quality Gates', 'Set CI pass/fail thresholds — max failures, min pass rate, max flaky rate, min stability grade, and no-new-failures rules.')">
+        <div class="gate-header">
+          <div class="gate-title-row">
+            <span class="section-icon">${icon('gauge')}</span>
+            <span class="gate-title">Quality Gates</span>
+          </div>
+          <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
+        </div>
+        <div class="gate-placeholder-desc">Configure CI pass/fail rules for your test suite</div>
+      </div>
+    </div>
+  ` : '');
+
+  // Flaky count sparkline from history + current run
+  const flakyCountHistory = [
+    ...(history.summaries ?? []).slice(-10).map(s => s.flaky ?? 0),
+    flaky,
+  ];
+  const maxFlakyCount = Math.max(...flakyCountHistory, 1);
+
+  // Quarantine card
+  const quarantineCount = quarantineEntries?.length ?? 0;
+  const quarantineHtml = quarantineCount > 0 ? `
+    <div class="overview-section quarantine-section">
+      <div class="quarantine-card">
+        ${generateSparkline(flakyCountHistory, '#eab308', 'sparkGradQuarantine', 0, maxFlakyCount)}
+        <div class="quarantine-header">
+          <div class="quarantine-title-row">
+            <span class="section-icon">${icon('lock')}</span>
+            <span class="quarantine-title">Quarantine</span>
+          </div>
+          <span class="quarantine-count">${quarantineCount} test${quarantineCount !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="quarantine-threshold">threshold &ge; ${(quarantineThreshold ?? 0.3).toFixed(1)} flakiness</div>
+        <div class="quarantine-entries">
+          ${quarantineEntries!.slice(0, 3).map(e => `
+            <div class="quarantine-entry">
+              <span class="quarantine-entry-title">${escapeHtml(e.title)}</span>
+              <span class="quarantine-entry-score">${e.flakinessScore.toFixed(2)}</span>
+            </div>
+          `).join('')}
+          ${quarantineCount > 3 ? `<div class="quarantine-more" onclick="filterTests('quarantined'); switchView('tests');">+ ${quarantineCount - 3} more</div>` : ''}
+        </div>
+      </div>
+    </div>
+  ` : (!hasPro ? `
+    <div class="overview-section quarantine-section">
+      <div class="quarantine-card pro-feature-placeholder gated-clickable" onclick="showUpgradeModal('Flaky Test Quarantine', 'Automatically isolate flaky tests that exceed a configurable threshold, keeping your CI results clean and actionable.')">
+        <div class="quarantine-header">
+          <div class="quarantine-title-row">
+            <span class="section-icon">${icon('lock')}</span>
+            <span class="quarantine-title">Quarantine</span>
+          </div>
+          <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
+        </div>
+        <div class="quarantine-placeholder-desc">Auto-quarantine flaky tests above a threshold</div>
+      </div>
+    </div>
+  ` : '');
+
+  // AI Suite Health Summary (Starter feature)
+  const aiHealthHtml = aiSuiteHealthSummary ? `
+    <div class="overview-section ai-health-section">
+      <div class="ai-health-card">
+        <div class="ai-health-header">
+          <div class="ai-health-title-row">
+            <span class="section-icon">${icon('bot')}</span>
+            <span class="ai-health-title">AI Health Summary</span>
+          </div>
+          <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
+        </div>
+        <div class="ai-health-body ai-markdown">${renderMarkdownLite(aiSuiteHealthSummary)}</div>
+      </div>
+    </div>
+  ` : (!hasPro ? `
+    <div class="overview-section ai-health-section">
+      <div class="ai-health-card pro-feature-placeholder gated-clickable" onclick="showUpgradeModal('AI Suite Health Summary', 'Get an AI-powered executive summary combining failure clusters, flakiness trends, and performance data into actionable insights.')">
+        <div class="ai-health-header">
+          <div class="ai-health-title-row">
+            <span class="section-icon">${icon('bot')}</span>
+            <span class="ai-health-title">AI Health Summary</span>
+          </div>
+          <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
+        </div>
+        <div class="ai-health-placeholder-desc">AI-powered executive summary of your test suite health</div>
+      </div>
+    </div>
+  ` : '');
+
+  // Upgrade CTA banner for Local (free) tier
+  const upgradeBannerHtml = !hasPro ? `
+    <div class="upgrade-banner" id="upgradeBanner">
+      <div class="upgrade-banner-content">
+        <div class="upgrade-banner-text">
+          <span class="upgrade-banner-icon">${icon('zap', 18)}</span>
+          <span><strong>Unlock the full suite</strong> — AI analysis, PDF exports, live controls, quality gates, and more from <strong>&pound;5/mo</strong></span>
+        </div>
+        <div class="upgrade-banner-actions">
+          <a class="upgrade-banner-btn" href="https://stagewright.dev/#pricing" target="_blank" rel="noopener">View Plans</a>
+          <button class="upgrade-banner-dismiss" onclick="dismissUpgradeBanner()" title="Dismiss" aria-label="Dismiss upgrade banner">&times;</button>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
+  // Feature usage summary card for Local (free) tier
+  const lockedFeatures = [
+    { name: 'AI Failure Analysis', desc: 'AI-powered root cause insights' },
+    { name: 'PDF / JSON / JUnit Export', desc: 'Share reports with stakeholders' },
+    { name: 'Live Run Controls', desc: 'Run, cancel, and filter from the dashboard' },
+    { name: 'Quality Gates', desc: 'CI pass/fail thresholds for your suite' },
+    { name: 'Flaky Test Quarantine', desc: 'Auto-isolate unreliable tests' },
+    { name: 'Premium Themes', desc: '6 additional themes + custom colours' },
+    { name: 'Custom Branding', desc: 'Logo, title, and footer customisation' },
+    { name: 'AI Suite Health Summary', desc: 'Executive overview of suite health' },
+  ];
+  const activeFeatures = [
+    'Stability Grades', 'Flakiness Detection', 'Performance Trends',
+    'Attachments Gallery', 'Trace Viewer', 'Run Comparison', 'CI Detection',
+  ];
+  const featureUsageHtml = !hasPro ? `
+    <div class="overview-section feature-usage-section">
+      <div class="feature-usage-card">
+        <div class="feature-usage-header">
+          <div class="feature-usage-title-row">
+            <span class="section-icon">${icon('package')}</span>
+            <span class="feature-usage-title">Your Plan: Local</span>
+          </div>
+          <a class="feature-usage-upgrade-link" href="https://stagewright.dev/#pricing" target="_blank" rel="noopener">Upgrade</a>
+        </div>
+        <div class="feature-usage-columns">
+          <div class="feature-usage-col">
+            <div class="feature-usage-col-header active-header">${icon('check', 14)} ${activeFeatures.length} Active</div>
+            ${activeFeatures.map(f => `<div class="feature-usage-item active">${escapeHtml(f)}</div>`).join('')}
+          </div>
+          <div class="feature-usage-col">
+            <div class="feature-usage-col-header locked-header">${icon('lock', 14)} ${lockedFeatures.length} Locked</div>
+            ${lockedFeatures.map(f => `<div class="feature-usage-item locked" title="${escapeHtml(f.desc)}">${escapeHtml(f.name)}</div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
   return `
+    ${upgradeBannerHtml}
+
     <!-- Hero Stats Row -->
     <div class="hero-stats">
       <div class="hero-stat-card health ${healthClass}">
@@ -324,6 +594,12 @@ function generateOverviewContent(
       </div>
     </div>
 
+    ${aiHealthHtml}
+
+    ${qualityGatesHtml}
+
+    ${quarantineHtml}
+
     ${attentionHtml}
 
     ${clustersHtml}
@@ -331,13 +607,13 @@ function generateOverviewContent(
     <!-- Quick Insights -->
     <div class="overview-section">
       <div class="section-header">
-        <span class="section-icon">💡</span>
+        <span class="section-icon">${icon('lightbulb')}</span>
         <span class="section-title">Quick Insights</span>
       </div>
       <div class="insights-grid">
         ${slowestTest ? `
           <div class="insight-card" onclick="selectTest('${sanitizeId(slowestTest.testId)}'); switchView('tests');">
-            <div class="insight-icon">🐢</div>
+            <div class="insight-icon">${icon('hourglass', 24)}</div>
             <div class="insight-content">
               <div class="insight-label">Slowest Test</div>
               <div class="insight-title">${escapeHtml(slowestTest.title)}</div>
@@ -347,7 +623,7 @@ function generateOverviewContent(
         ` : ''}
         ${mostFlakyTest && mostFlakyTest.flakinessScore && mostFlakyTest.flakinessScore > 0 ? `
           <div class="insight-card" onclick="selectTest('${sanitizeId(mostFlakyTest.testId)}'); switchView('tests');">
-            <div class="insight-icon">⚡</div>
+            <div class="insight-icon">${icon('zap', 24)}</div>
             <div class="insight-content">
               <div class="insight-label">Most Flaky Test</div>
               <div class="insight-title">${escapeHtml(mostFlakyTest.title)}</div>
@@ -355,19 +631,8 @@ function generateOverviewContent(
             </div>
           </div>
         ` : ''}
-        <div class="insight-card clickable" onclick="switchView('tests')" title="View all tests">
-          <div class="insight-icon">📊</div>
-          <div class="insight-content">
-            <div class="insight-label">Test Distribution</div>
-            <div class="insight-mini-stats">
-              <span class="mini-stat"><span class="dot passed"></span>${passed} passed</span>
-              <span class="mini-stat"><span class="dot failed"></span>${failed} failed</span>
-              <span class="mini-stat"><span class="dot skipped"></span>${skipped} skipped</span>
-            </div>
-          </div>
-        </div>
         <div class="insight-card clickable" onclick="switchView('trends')" title="View trends">
-          <div class="insight-icon">📈</div>
+          <div class="insight-icon">${icon('trending-up', 24)}</div>
           <div class="insight-content">
             <div class="insight-label">Pass Rate Trend</div>
             <div class="mini-sparkline">
@@ -381,13 +646,15 @@ function generateOverviewContent(
         </div>
       </div>
     </div>
+
+    ${featureUsageHtml}
   `;
 }
 
 /**
  * Generate complete HTML report with new app-shell layout
  */
-export function generateHtml(data: HtmlGeneratorData): string {
+export function generateHtml(data: HtmlGeneratorData): GeneratedReport {
   const { results, history, startTime, options, comparison, historyRunSnapshots, failureClusters, ciInfo } = data;
 
   const totalDuration = Date.now() - startTime;
@@ -406,9 +673,8 @@ export function generateHtml(data: HtmlGeneratorData): string {
     (r.status === 'failed' || r.status === 'timedOut')
   ).length;
   const skipped = results.filter((r) => r.status === 'skipped').length;
-  // Flaky: tests that passed on retry (outcome='flaky')
-  // This is more accurate than flakinessScore which is history-based
-  const flaky = results.filter((r) => r.outcome === 'flaky').length;
+  // Flaky: tests that are flaky by either outcome (retry-based) OR history (flakinessScore >= 0.3)
+  const flaky = results.filter((r) => r.outcome === 'flaky' || (r.flakinessScore !== undefined && r.flakinessScore >= 0.3)).length;
   const slow = results.filter((r) =>
     r.performanceTrend?.startsWith('↑')
   ).length;
@@ -495,16 +761,29 @@ export function generateHtml(data: HtmlGeneratorData): string {
     };
   });
 
-  // Escape JSON for safe embedding in HTML <script> tags
+  // Escape JSON for safe embedding in HTML <script> tags (& first to avoid double-encoding)
   const testsJson = JSON.stringify(lightenedResults)
+    .replace(/&/g, '\\u0026')
     .replace(/</g, '\\u003c')
-    .replace(/>/g, '\\u003e')
-    .replace(/&/g, '\\u0026');
+    .replace(/>/g, '\\u003e');
 
   // Feature flags
   const showGallery = options.enableGalleryView !== false;
   const showComparison = (options.enableComparison !== false && !!comparison);
+  const showLive = options.live?.enabled !== false; // Always show Live tab unless explicitly disabled
+  const liveConfigured = !!options.live?.enabled; // Actual live functionality configured
   const cspSafe = options.cspSafe === true;
+  const licenseTier = data.licenseTier ?? 'community';
+  const hasPro = licenseTier !== 'community';
+  // Starter = any non-community tier (starter|pro|team). Identical to hasPro today;
+  // kept separate so Live gating can diverge from Pro gating if tiers evolve.
+  const hasStarter = licenseTier !== 'community';
+  const quarantinedTestIds = data.quarantinedTestIds;
+  const quarantineCount = quarantinedTestIds?.size ?? 0;
+  const outputBasename = escapeHtml(data.outputBasename ?? 'smart-report');
+  const branding = options.branding;
+  const reportTitle = branding?.title ?? 'StageWright Local';
+  const reportSubtitle = branding?.title ? '' : 'Get your test stage right.';
   const enableTraceViewer = options.enableTraceViewer !== false;
   const showTraceSection = enableTraceViewer;
   const enableHistoryDrilldown = options.enableHistoryDrilldown === true;
@@ -538,9 +817,9 @@ export function generateHtml(data: HtmlGeneratorData): string {
     : {};
   const historyRunSnapshotsJson = enableHistoryDrilldown
     ? JSON.stringify(lightenedHistorySnapshots)
+        .replace(/&/g, '\\u0026')
         .replace(/</g, '\\u003c')
         .replace(/>/g, '\\u003e')
-        .replace(/&/g, '\\u0026')
     : '{}';
 
   // Google Fonts links (only included when not in CSP-safe mode)
@@ -550,17 +829,62 @@ export function generateHtml(data: HtmlGeneratorData): string {
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">`;
 
   // Stats data for JavaScript
-  const statsData = JSON.stringify({ passed, failed, skipped, flaky, slow, newTests, total, passRate, gradeA, gradeB, gradeC, gradeD, gradeF, totalDuration });
+  const statsData = JSON.stringify({ passed, failed, skipped, flaky, slow, newTests, total, passRate, gradeA, gradeB, gradeC, gradeD, gradeF, totalDuration })
+    .replace(/&/g, '\\u0026')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e');
 
-  return `<!DOCTYPE html>
-<html lang="en">
+  const cssContent = generateStyles(passRate, cspSafe, options.theme);
+  const scriptBody = generateScripts(testsJson, showGallery, showComparison, enableTraceViewer, enableHistoryDrilldown, historyRunSnapshotsJson, statsData, outputBasename);
+  const traceScript = enableTraceViewer ? generateTraceViewerScript() : '';
+
+  // CSP-safe mode: build companion CSS/JS files
+  let externalCss: string | undefined;
+  let externalJs: string | undefined;
+
+  if (cspSafe) {
+    externalCss = cssContent;
+
+    // Build external JS: extract script body after data declarations, prepend DOM-based reads
+    const cspDataInit = `    const tests = JSON.parse(document.getElementById('report-data-tests').textContent);
+    const pdfBasename = JSON.parse(document.getElementById('report-data-basename').textContent);
+    const stats = JSON.parse(document.getElementById('report-data-stats').textContent);
+    const traceViewerEnabled = ${enableTraceViewer ? 'true' : 'false'};
+    const historyDrilldownEnabled = ${enableHistoryDrilldown ? 'true' : 'false'};
+    const historyRunSnapshots = JSON.parse(document.getElementById('report-data-history-snapshots').textContent);`;
+
+    // Split on the @csp-split marker to separate data declarations from app logic
+    const splitMarker = '/* @csp-split */';
+    const splitIdx = scriptBody.indexOf(splitMarker);
+    if (splitIdx === -1) {
+      throw new Error('CSP split marker not found in generated scripts — cannot build external JS');
+    }
+    const jsAfterDeclarations = scriptBody.substring(splitIdx + splitMarker.length);
+    externalJs = (enableTraceViewer ? generateJSZipScript() + '\n' : '')
+      + cspDataInit + '\n' + jsAfterDeclarations
+      + (traceScript ? '\n' + traceScript : '');
+  }
+
+  // Head section differs between CSP and standard modes
+  const headStyles = cspSafe
+    ? `  <link rel="stylesheet" href="${outputBasename}.css">`
+    : `  <style>\n${cssContent}\n  </style>`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en"${options.theme?.preset && options.theme.preset !== 'default' ? ` data-theme="${escapeHtml(options.theme.preset)}"` : ''}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Test Report</title>${fontLinks}
-  <style>
-${generateStyles(passRate, cspSafe)}
-  </style>
+  <title>${escapeHtml(reportTitle)} — Smart Test Report</title>
+  <meta name="description" content="Interactive Playwright test report with stability grades, flakiness detection, trend analytics, and AI-powered failure analysis.">
+  <meta property="og:title" content="${escapeHtml(reportTitle)} — Smart Test Report">
+  <meta property="og:description" content="Interactive Playwright test report with stability grades, flakiness detection, trend analytics, and AI-powered failure analysis.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://stagewright.dev/og-image.png?v=3">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <link rel="icon" type="image/png" href="https://stagewright.dev/logo.png">${cspSafe ? '' : fontLinks}
+${headStyles}
 </head>
 <body>
   <!-- Skip to main content for accessibility -->
@@ -572,12 +896,13 @@ ${generateStyles(passRate, cspSafe)}
     <header class="top-bar">
       <div class="top-bar-left">
         <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle Sidebar (⌘B)" aria-label="Toggle sidebar navigation" aria-expanded="true" aria-controls="sidebar">
-          <span class="hamburger-icon" aria-hidden="true">☰</span>
+          <span class="hamburger-icon" aria-hidden="true">${icon('menu')}</span>
         </button>
         <div class="logo">
+${branding?.logo ? `          <img class="logo-image" src="${escapeHtml(branding.logo)}" alt="${escapeHtml(reportTitle)} logo" height="28" />` : ''}
           <div class="logo-text">
-            <span class="logo-title">StageWright Local</span>
-            <span class="logo-subtitle">Get your test stage right.</span>
+            <span class="logo-title">${escapeHtml(reportTitle)}</span>
+${reportSubtitle ? `            <span class="logo-subtitle">${escapeHtml(reportSubtitle)}</span>` : ''}
           </div>
         </div>
         <nav class="breadcrumbs">
@@ -588,42 +913,84 @@ ${generateStyles(passRate, cspSafe)}
       </div>
       <div class="top-bar-right">
         <button class="search-trigger" onclick="openSearch()" title="Search (⌘K)" aria-label="Search tests">
-          <span class="search-icon-btn">🔍</span>
+          <span class="search-icon-btn">${icon('search')}</span>
           <span class="search-label">Search...</span>
           <kbd class="search-kbd">⌘K</kbd>
         </button>
         <div class="export-dropdown" id="exportDropdown">
           <button class="top-bar-btn" onclick="toggleExportMenu()" title="Export" aria-haspopup="true" aria-expanded="false">
-            <span>📥</span>
+            <span>${icon('download')}</span>
             <span class="btn-label">Export</span>
           </button>
           <div class="export-menu" role="menu">
             <button class="export-menu-item" onclick="exportJSON()" role="menuitem">
-              <span>📄</span> JSON
+              <span>${icon('braces')}</span> JSON
             </button>
             <button class="export-menu-item" onclick="exportCSV()" role="menuitem">
-              <span>📊</span> CSV
+              <span>${icon('table')}</span> CSV
             </button>
             <button class="export-menu-item" onclick="showSummaryExport()" role="menuitem">
-              <span>📋</span> Summary Card
+              <span>${icon('clipboard')}</span> Summary Card
             </button>
+${hasPro ? `            <div class="export-menu-divider" style="height:1px;background:var(--border-subtle);margin:4px 0;"></div>
+${options.exportPdf ? `            <button class="export-menu-item" onclick="showPdfPicker()" role="menuitem">
+              <span>${icon('file-text')}</span> PDF Report
+            </button>` : ''}
+${options.exportJson ? `            <a class="export-menu-item" href="${outputBasename}-data.json" download role="menuitem" style="text-decoration:none;color:inherit;">
+              <span>${icon('package')}</span> Full JSON Data
+            </a>` : ''}
+${options.exportJunit ? `            <a class="export-menu-item" href="${outputBasename}-junit.xml" download role="menuitem" style="text-decoration:none;color:inherit;">
+              <span>${icon('tag')}</span> JUnit XML
+            </a>` : ''}` : `            <div class="export-menu-divider" style="height:1px;background:var(--border-subtle);margin:4px 0;"></div>
+            <button class="export-menu-item export-premium-placeholder" style="opacity:0.5;cursor:pointer;" onclick="showUpgradeModal('PDF Report', 'Generate polished PDF reports in three variants — Executive Summary, Detailed Failures, and Full Report — perfect for sharing with stakeholders.')">
+              <span>${icon('file-text')}</span> PDF Report <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>
+            </button>
+            <button class="export-menu-item export-premium-placeholder" style="opacity:0.5;cursor:pointer;" onclick="showUpgradeModal('Full JSON Data', 'Export your complete test results as structured JSON for custom dashboards, data pipelines, and integrations.')">
+              <span>${icon('package')}</span> Full JSON Data <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>
+            </button>
+            <button class="export-menu-item export-premium-placeholder" style="opacity:0.5;cursor:pointer;" onclick="showUpgradeModal('JUnit XML', 'Export JUnit XML for CI/CD integration with Jenkins, GitHub Actions, Azure DevOps, and more.')">
+              <span>${icon('tag')}</span> JUnit XML <span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>
+            </button>`}
           </div>
         </div>
         <div class="theme-dropdown" id="themeDropdown">
           <button class="theme-toggle" onclick="toggleThemeMenu()" title="Theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false">
-            <span class="theme-toggle-icon" id="themeIcon">🌙</span>
+            <span class="theme-toggle-icon" id="themeIcon">${icon('moon')}</span>
             <span class="theme-label" id="themeLabel">Dark</span>
           </button>
           <div class="theme-menu" role="menu">
             <button class="theme-menu-item" onclick="setTheme('system')" role="menuitem" data-theme="system">
-              <span>💻</span> System
+              <span>${icon('monitor')}</span> System
             </button>
             <button class="theme-menu-item" onclick="setTheme('light')" role="menuitem" data-theme="light">
-              <span>☀️</span> Light
+              <span>${icon('sun')}</span> Light
             </button>
             <button class="theme-menu-item" onclick="setTheme('dark')" role="menuitem" data-theme="dark">
-              <span>🌙</span> Dark
+              <span>${icon('moon')}</span> Dark
             </button>
+            <div style="height:1px;background:var(--border-subtle);margin:4px 0;position:relative;">
+              <span style="position:absolute;right:4px;top:-8px;font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;">Starter</span>
+            </div>
+${!hasPro ? `            <div style="opacity:0.4;pointer-events:none;">` : ''}
+            <button class="theme-menu-item" onclick="setTheme('ocean')" role="menuitem" data-theme="ocean">
+              <span>${icon('waves')}</span> Ocean
+            </button>
+            <button class="theme-menu-item" onclick="setTheme('sunset')" role="menuitem" data-theme="sunset">
+              <span>${icon('sunset')}</span> Sunset
+            </button>
+            <button class="theme-menu-item" onclick="setTheme('dracula')" role="menuitem" data-theme="dracula">
+              <span>${icon('moon')}</span> Dracula
+            </button>
+            <button class="theme-menu-item" onclick="setTheme('cyberpunk')" role="menuitem" data-theme="cyberpunk">
+              <span>${icon('zap')}</span> Cyberpunk
+            </button>
+            <button class="theme-menu-item" onclick="setTheme('forest')" role="menuitem" data-theme="forest">
+              <span>${icon('tree-pine')}</span> Forest
+            </button>
+            <button class="theme-menu-item" onclick="setTheme('rose')" role="menuitem" data-theme="rose">
+              <span>${icon('flower-2')}</span> Rose
+            </button>
+${!hasPro ? `            </div>` : ''}
           </div>
         </div>
         <div class="timestamp">${new Date().toLocaleString()}</div>
@@ -645,6 +1012,22 @@ ${generateStyles(passRate, cspSafe)}
 
     <!-- Toast notifications container -->
     <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+    <!-- Upgrade modal for gated features -->
+    ${!hasStarter ? `
+    <div class="upgrade-modal-overlay" id="upgradeModal" role="dialog" aria-modal="true" aria-labelledby="upgradeModalTitle" style="display:none">
+      <div class="upgrade-modal">
+        <button class="upgrade-modal-close" onclick="closeUpgradeModal()" aria-label="Close">&times;</button>
+        <div class="upgrade-modal-icon">${icon('lock', 32)}</div>
+        <h3 class="upgrade-modal-title" id="upgradeModalTitle">Unlock <span id="upgradeFeatureName"></span></h3>
+        <p class="upgrade-modal-desc" id="upgradeFeatureDesc"></p>
+        <div class="upgrade-modal-actions">
+          <a class="upgrade-modal-btn primary" href="https://stagewright.dev/#pricing" target="_blank" rel="noopener">View Plans</a>
+          <button class="upgrade-modal-btn secondary" onclick="closeUpgradeModal()">Maybe Later</button>
+        </div>
+      </div>
+    </div>
+    ` : ''}
 
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
@@ -683,28 +1066,36 @@ ${generateStyles(passRate, cspSafe)}
         <div class="nav-section-title" id="nav-section-label">Navigation</div>
         <div role="tablist" aria-labelledby="nav-section-label">
           <button class="nav-item active" data-view="overview" onclick="switchView('overview')" role="tab" aria-selected="true" aria-controls="view-overview">
-            <span class="nav-icon" aria-hidden="true">📊</span>
+            <span class="nav-icon" aria-hidden="true">${icon('bar-chart-2')}</span>
             <span class="nav-label">Overview</span>
           </button>
           <button class="nav-item" data-view="tests" onclick="switchView('tests')" role="tab" aria-selected="false" aria-controls="view-tests">
-            <span class="nav-icon" aria-hidden="true">🧪</span>
+            <span class="nav-icon" aria-hidden="true">${icon('test-tube')}</span>
             <span class="nav-label">Tests</span>
             <span class="nav-badge" aria-label="${total} total tests">${total}</span>
           </button>
           <button class="nav-item" data-view="trends" onclick="switchView('trends')" role="tab" aria-selected="false" aria-controls="view-trends">
-            <span class="nav-icon" aria-hidden="true">📈</span>
+            <span class="nav-icon" aria-hidden="true">${icon('trending-up')}</span>
             <span class="nav-label">Trends</span>
           </button>
           ${showComparison ? `
           <button class="nav-item" data-view="comparison" onclick="switchView('comparison')" role="tab" aria-selected="false" aria-controls="view-comparison">
-            <span class="nav-icon" aria-hidden="true">⚖️</span>
+            <span class="nav-icon" aria-hidden="true">${icon('scale')}</span>
             <span class="nav-label">Comparison</span>
           </button>
           ` : ''}
           ${showGallery ? `
           <button class="nav-item" data-view="gallery" onclick="switchView('gallery')" role="tab" aria-selected="false" aria-controls="view-gallery">
-            <span class="nav-icon" aria-hidden="true">🖼️</span>
+            <span class="nav-icon" aria-hidden="true">${icon('image')}</span>
             <span class="nav-label">Gallery</span>
+          </button>
+          ` : ''}
+          ${showLive ? `
+          <button class="nav-item" data-view="live" onclick="switchView('live')" role="tab" aria-selected="false" aria-controls="view-live">
+            <span class="nav-icon" aria-hidden="true">${icon('radio')}</span>
+            <span class="nav-label">Live</span>
+            ${!hasStarter ? `<span class="premium-badge" style="font-size:9px;background:var(--accent-purple);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;">Starter</span>` : ''}
+            <span class="live-nav-dot" id="live-nav-indicator"></span>
           </button>
           ` : ''}
         </div>
@@ -737,6 +1128,7 @@ ${generateStyles(passRate, cspSafe)}
             <button class="filter-chip" data-filter="flaky" data-group="health" onclick="toggleFilter(this)" aria-pressed="false">Flaky (${flaky})</button>
             <button class="filter-chip" data-filter="slow" data-group="health" onclick="toggleFilter(this)" aria-pressed="false">Slow (${slow})</button>
             <button class="filter-chip" data-filter="new" data-group="health" onclick="toggleFilter(this)" aria-pressed="false">New (${newTests})</button>
+${quarantineCount > 0 ? `            <button class="filter-chip attention-quarantine" data-filter="quarantined" data-group="health" onclick="toggleFilter(this)" aria-pressed="false">Quarantined (${quarantineCount})</button>` : ''}
           </div>
         </div>
         <div class="filter-group" data-group="grade" role="group" aria-label="Grade filters">
@@ -782,7 +1174,7 @@ ${generateStyles(passRate, cspSafe)}
       <!-- Duration -->
       <div class="sidebar-footer">
         <div class="run-duration">
-          <span class="duration-icon">⏱️</span>
+          <span class="duration-icon">${icon('clock')}</span>
           <span class="duration-value">${formatDuration(totalDuration)}</span>
         </div>
       </div>
@@ -796,7 +1188,7 @@ ${generateStyles(passRate, cspSafe)}
           <h2 class="view-title">Overview</h2>
         </div>
         <div class="overview-content">
-          ${generateOverviewContent(results, comparison, failureClusters, passed, failed, skipped, flaky, slow, newTests, total, passRate, totalDuration, history)}
+          ${generateOverviewContent(results, comparison, failureClusters, passed, failed, skipped, flaky, slow, newTests, total, passRate, totalDuration, history, data.qualityGateResult, data.quarantineEntries, data.quarantineThreshold, licenseTier, data.aiSuiteHealthSummary)}
         </div>
       </section>
 
@@ -819,7 +1211,7 @@ ${generateStyles(passRate, cspSafe)}
             <div class="test-list-content">
               <!-- Empty state for no results -->
               <div class="empty-state" id="emptyState" style="display: none;">
-                <div class="empty-state-icon">🔍</div>
+                <div class="empty-state-icon">${icon('search', 24)}</div>
                 <div class="empty-state-title">No tests found</div>
                 <div class="empty-state-message">No tests match your current filters. Try adjusting your search or filter criteria.</div>
                 <button class="empty-state-action" onclick="clearAllFilters()">Clear filters</button>
@@ -827,12 +1219,12 @@ ${generateStyles(passRate, cspSafe)}
               <!-- All Tests Tab -->
               <div class="test-tab-content active" id="tab-all" role="tabpanel" aria-labelledby="tab-all-label">
                 <div role="list" aria-label="All tests">
-                  ${generateTestListItems(sortedResults, showTraceSection, attentionSets)}
+                  ${generateTestListItems(sortedResults, showTraceSection, attentionSets, quarantinedTestIds)}
                 </div>
               </div>
               <!-- By Spec Tab -->
               <div class="test-tab-content" id="tab-by-file" role="tabpanel" aria-labelledby="tab-by-file-label">
-                ${generateGroupedTests(sortedResults, showTraceSection, attentionSets)}
+                ${generateGroupedTests(sortedResults, showTraceSection, attentionSets, quarantinedTestIds)}
               </div>
               <!-- By Status Tab -->
               <div class="test-tab-content" id="tab-by-status" role="tabpanel" aria-labelledby="tab-by-status-label">
@@ -841,21 +1233,21 @@ ${generateStyles(passRate, cspSafe)}
                     <span class="status-group-dot failed"></span>
                     <span class="status-group-title">Failed (${failed})</span>
                   </div>
-                  ${generateTestListItems(sortedResults.filter(r => r.status === 'failed' || r.status === 'timedOut'), showTraceSection, attentionSets)}
+                  ${generateTestListItems(sortedResults.filter(r => r.status === 'failed' || r.status === 'timedOut'), showTraceSection, attentionSets, quarantinedTestIds)}
                 </div>
                 <div class="status-group passed-group">
                   <div class="status-group-header">
                     <span class="status-group-dot passed"></span>
                     <span class="status-group-title">Passed (${passed})</span>
                   </div>
-                  ${generateTestListItems(sortedResults.filter(r => r.status === 'passed'), showTraceSection, attentionSets)}
+                  ${generateTestListItems(sortedResults.filter(r => r.status === 'passed'), showTraceSection, attentionSets, quarantinedTestIds)}
                 </div>
                 <div class="status-group skipped-group">
                   <div class="status-group-header">
                     <span class="status-group-dot skipped"></span>
                     <span class="status-group-title">Skipped (${skipped})</span>
                   </div>
-                  ${generateTestListItems(sortedResults.filter(r => r.status === 'skipped'), showTraceSection, attentionSets)}
+                  ${generateTestListItems(sortedResults.filter(r => r.status === 'skipped'), showTraceSection, attentionSets, quarantinedTestIds)}
                 </div>
               </div>
               <!-- By Stability Tab -->
@@ -869,7 +1261,7 @@ ${generateStyles(passRate, cspSafe)}
                         <span class="stability-badge ${grade.toLowerCase()}">${grade}</span>
                         <span class="stability-group-title">Grade ${grade} (${gradeTests.length})</span>
                       </div>
-                      ${generateTestListItems(gradeTests, showTraceSection, attentionSets)}
+                      ${generateTestListItems(gradeTests, showTraceSection, attentionSets, quarantinedTestIds)}
                     </div>
                   `;
                 }).join('')}
@@ -880,7 +1272,7 @@ ${generateStyles(passRate, cspSafe)}
           <!-- Test Detail (Detail) -->
           <div class="test-detail-panel" id="test-detail-panel">
             <div class="detail-placeholder">
-              <div class="placeholder-icon">🧪</div>
+              <div class="placeholder-icon">${icon('test-tube', 32)}</div>
               <div class="placeholder-text">Select a test to view details</div>
               <div class="placeholder-hint">Click on any test in the list</div>
             </div>
@@ -921,6 +1313,112 @@ ${generateStyles(passRate, cspSafe)}
         </div>
       </section>
       ` : ''}
+      ${showLive ? `
+      <!-- Live View -->
+      <section class="view-panel${hasStarter ? '' : ' live-section-gated'}" id="view-live" role="tabpanel" aria-label="Live" style="display: none;"${!hasStarter ? ` onclick="showUpgradeModal('Live Run Controls', 'Run, cancel, and filter tests directly from the dashboard with real-time progress tracking.')"` : ''}>
+        <div class="view-header">
+          <h2 class="view-title">Live Execution</h2>
+          <span class="live-header-badge" id="live-status-badge">
+            <span class="live-header-dot" id="live-header-dot"></span>
+            <span id="live-status-text">Completed</span>
+          </span>
+        </div>
+        <div class="live-controls-wrapper" id="live-controls-wrapper">
+          <div class="live-run-row live-run-row-hidden" id="live-run-row">
+            <button class="live-run-btn" id="live-run-btn" onclick="runTests()">Run Tests</button>
+            <button class="live-cancel-btn" id="live-cancel-btn" onclick="cancelTests()" style="display:none">Cancel</button>
+            <span class="live-filter-summary" id="live-filter-summary"></span>
+            <button class="live-filter-toggle" id="live-filter-toggle" onclick="toggleFilterPanel()" title="Filter tests">
+              ${icon('filter', 16)} <span id="live-filter-toggle-label">Filters</span>
+            </button>
+          </div>
+          <div class="live-filter-panel" id="live-filter-panel" style="display:none">
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('grep')">
+                <span>Grep (title match)</span>
+                <span class="live-filter-chevron" id="live-filter-chevron-grep">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-grep">
+                <input type="text" class="live-filter-grep-input" id="live-filter-grep" placeholder="e.g. login, checkout flow..." oninput="cascadeFilters()">
+              </div>
+            </div>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('tags')">
+                <span>Tags</span>
+                <span class="live-filter-count" id="live-filter-tags-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-tags">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-tags">
+                <div class="live-filter-chips" id="live-filter-tags-chips"></div>
+              </div>
+            </div>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('files')">
+                <span>Files</span>
+                <span class="live-filter-count" id="live-filter-files-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-files">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-files" style="display:none">
+                <div class="live-filter-file-actions">
+                  <button class="live-filter-action-btn" onclick="selectAllFiles(true)">All</button>
+                  <button class="live-filter-action-btn" onclick="selectAllFiles(false)">None</button>
+                </div>
+                <div class="live-filter-file-list" id="live-filter-files-list"></div>
+              </div>
+            </div>
+            <div class="live-filter-section">
+              <div class="live-filter-section-header" onclick="toggleFilterSection('suites')">
+                <span>Suites</span>
+                <span class="live-filter-count" id="live-filter-suites-count"></span>
+                <span class="live-filter-chevron" id="live-filter-chevron-suites">${icon('chevron-down', 14)}</span>
+              </div>
+              <div class="live-filter-section-body" id="live-filter-body-suites" style="display:none">
+                <div class="live-filter-file-list" id="live-filter-suites-list"></div>
+              </div>
+            </div>
+            <div class="live-filter-bar-actions">
+              <button class="live-filter-clear-btn" id="live-filter-clear" onclick="clearAllFilters()" style="display:none">Clear all filters</button>
+            </div>
+          </div>
+        </div>
+        <div class="live-content">
+          <div class="live-elapsed-row">
+            <span class="live-elapsed-label">Elapsed</span>
+            <span class="live-elapsed-value" id="live-elapsed">${formatDuration(totalDuration)}</span>
+          </div>
+          <div class="live-progress-track" id="live-progress-track">
+            <div class="live-seg live-seg-passed" id="live-seg-passed" style="width:${total > 0 ? ((passed / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-failed" id="live-seg-failed" style="width:${total > 0 ? ((failed / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-flaky" id="live-seg-flaky" style="width:${total > 0 ? ((flaky / total) * 100).toFixed(1) : 0}%"></div>
+            <div class="live-seg live-seg-skipped" id="live-seg-skipped" style="width:${total > 0 ? ((skipped / total) * 100).toFixed(1) : 0}%"></div>
+          </div>
+          <div class="live-progress-label" id="live-progress-label">${total} / ${total} tests</div>
+          <div class="live-counters">
+            <div class="live-counter-card live-c-passed"><div class="live-counter-value" id="live-counter-passed">${passed}</div><div class="live-counter-label">Passed</div></div>
+            <div class="live-counter-card live-c-failed"><div class="live-counter-value" id="live-counter-failed">${failed}</div><div class="live-counter-label">Failed</div></div>
+            <div class="live-counter-card live-c-flaky"><div class="live-counter-value" id="live-counter-flaky">${flaky}</div><div class="live-counter-label">Flaky</div></div>
+            <div class="live-counter-card live-c-skipped"><div class="live-counter-value" id="live-counter-skipped">${skipped}</div><div class="live-counter-label">Skipped</div></div>
+          </div>
+          <div class="live-failure-section">
+            <h3>Failures</h3>
+            <div id="live-failure-feed">${results.filter(r => r.status === 'failed' || r.status === 'timedOut').map(r => {
+              const failCardId = sanitizeId(r.testId);
+              return `<div class="live-failure-item live-failure-clickable" data-testid="${escapeHtml(r.testId)}" onclick="selectTest('${failCardId}'); switchView('tests');">
+                <div class="live-failure-item-main">
+                  ${r.screenshot && !r.screenshot.startsWith('data:') ? `<img class="live-failure-thumb" src="${r.screenshot}" alt="Failure screenshot">` : ''}
+                  <div class="live-failure-item-text">
+                    <div class="live-failure-title">${escapeHtml(r.title)}</div>
+                    <div class="live-failure-file">${escapeHtml(r.file)}${r.retry > 0 ? ` (retry ${r.retry})` : ''}</div>
+                    ${r.error ? `<div class="live-failure-error">${escapeHtml(r.error.split('\\n')[0])}</div>` : ''}
+                  </div>
+                </div>
+                <span class="live-failure-view-link">View Details &rarr;</span>
+              </div>`;
+            }).join('')}</div>
+          </div>
+        </div>
+      </section>
+      ` : ''}
     </main>
   </div>
 
@@ -929,7 +1427,7 @@ ${generateStyles(passRate, cspSafe)}
     <div class="search-modal-backdrop" onclick="closeSearch()"></div>
     <div class="search-modal-content">
       <div class="search-modal-header">
-        <span class="search-modal-icon" aria-hidden="true">🔍</span>
+        <span class="search-modal-icon" aria-hidden="true">${icon('search')}</span>
         <label for="search-modal-input" class="visually-hidden" id="search-modal-title">Search tests</label>
         <input type="text" class="search-modal-input" id="search-modal-input" placeholder="Search tests..." oninput="handleSearchInput(this.value)" aria-describedby="search-modal-hint">
         <span id="search-modal-hint" class="visually-hidden">Press Escape to close</span>
@@ -944,25 +1442,722 @@ ${generateStyles(passRate, cspSafe)}
 
   <!-- Hidden data containers for detail rendering -->
   <div id="test-cards-data" style="display: none;">
-    ${results.map(test => generateTestCard(test, showTraceSection)).join('\n')}
+    ${results.map(test => generateTestCard(test, showTraceSection, quarantinedTestIds)).join('\n')}
   </div>
 
-  <!-- Issue #13: JSZip library for trace extraction -->
+  ${cspSafe ? `<!-- CSP-safe: data embedded as JSON, scripts loaded externally -->
+  <script type="application/json" id="report-data-tests">${testsJson}</script>
+  <script type="application/json" id="report-data-basename">${JSON.stringify(outputBasename)}</script>
+  <script type="application/json" id="report-data-stats">${statsData}</script>
+  <script type="application/json" id="report-data-history-snapshots">${historyRunSnapshotsJson}</script>
+  <script src="${outputBasename}.js" defer></script>` : `<!-- Issue #13: JSZip library for trace extraction -->
   ${enableTraceViewer ? `<script>${generateJSZipScript()}</script>` : ''}
 
   <script>
-${generateScripts(testsJson, showGallery, showComparison, enableTraceViewer, enableHistoryDrilldown, historyRunSnapshotsJson, statsData)}
+${scriptBody}
 
-${enableTraceViewer ? generateTraceViewerScript() : ''}
+${traceScript}
+  </script>`}
+${liveConfigured ? `
+  <script>
+  (function initLiveView() {
+    var liveJsonlFile = ${JSON.stringify(escapeHtml(data.options.live!.outputFile ?? '.smart-live-results.jsonl'))};
+    var isLiveMode = document.documentElement.hasAttribute('data-live-mode');
+    var liveCompleted = !isLiveMode;
+    var liveStartTime = Date.now();
+    var liveTotalExpected = 0;
+    var liveTimerRunning = isLiveMode;
+    var liveEventSource = null;
+    var livePollTimer = null;
+    var liveIgnoreEvents = false;
+
+    function tickLiveElapsed() {
+      if (!liveTimerRunning) return;
+      var s = Math.floor((Date.now() - liveStartTime) / 1000);
+      var m = Math.floor(s / 60);
+      var el = document.getElementById('live-elapsed');
+      if (el) el.textContent = m > 0 ? m + 'm ' + (s % 60) + 's' : s + 's';
+      setTimeout(tickLiveElapsed, 1000);
+    }
+
+    function escLive(s) {
+      var d = document.createElement('div');
+      d.appendChild(document.createTextNode(s));
+      return d.innerHTML;
+    }
+
+    function updateLiveUI(counters) {
+      liveTotalExpected = counters.totalExpected || liveTotalExpected || 1;
+      var completed = (counters.passed||0)+(counters.failed||0)+(counters.flaky||0)+(counters.skipped||0);
+      document.getElementById('live-counter-passed').textContent = counters.passed||0;
+      document.getElementById('live-counter-failed').textContent = counters.failed||0;
+      document.getElementById('live-counter-flaky').textContent = counters.flaky||0;
+      document.getElementById('live-counter-skipped').textContent = counters.skipped||0;
+      document.getElementById('live-seg-passed').style.width = ((counters.passed||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-failed').style.width = ((counters.failed||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-flaky').style.width = ((counters.flaky||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-seg-skipped').style.width = ((counters.skipped||0)/liveTotalExpected*100)+'%';
+      document.getElementById('live-progress-label').textContent = completed+' / '+liveTotalExpected+' tests';
+    }
+
+    function addLiveFailure(ev) {
+      var feed = document.getElementById('live-failure-feed');
+      var id = ev.testId || ev.title || '';
+      var safeId = 'live-fail-' + id.replace(/[^a-zA-Z0-9]/g, '_');
+      var existing = document.getElementById(safeId);
+      var html = '<div class="live-failure-item-main"><div class="live-failure-item-text">'
+        +'<div class="live-failure-title">'+escLive(ev.title||'')+'</div>'
+        +'<div class="live-failure-file">'+escLive(ev.file||'')+(ev.retry > 0 ? ' (retry '+ev.retry+')' : '')+'</div>'
+        +(ev.error ? '<div class="live-failure-error">'+escLive(ev.error.substring(0,500))+'</div>' : '')
+        +'</div></div>'
+        +'<span class="live-failure-pending-label">View details after run completes</span>';
+      if (existing) {
+        // data-testid persists on the element — only innerHTML is replaced on retry updates
+        existing.innerHTML = html;
+      } else {
+        var item = document.createElement('div');
+        item.className = 'live-failure-item';
+        item.id = safeId;
+        item.dataset.testid = id;
+        item.innerHTML = html;
+        feed.insertBefore(item, feed.firstChild);
+      }
+    }
+
+    function waitForFinalReport() {
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Generating report...';
+      fetch(window.location.href, { cache: 'no-store', method: 'HEAD' })
+        .then(function() { return fetch(window.location.href, { cache: 'no-store' }); })
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+          if (html && html.indexOf('data-live-mode') === -1) {
+            window.location.reload();
+          } else {
+            setTimeout(waitForFinalReport, 1000);
+          }
+        })
+        .catch(function() { setTimeout(waitForFinalReport, 1000); });
+    }
+
+    function onLiveComplete(ev) {
+      liveCompleted = true;
+      liveTimerRunning = false;
+      var b = document.getElementById('live-status-badge');
+      if (b) b.classList.remove('running');
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Completed';
+      var nd = document.getElementById('live-nav-indicator');
+      if (nd) nd.classList.add('stopped');
+      if (ev.counters) updateLiveUI(ev.counters);
+      setRunButtonState(false);
+      if (isLiveMode) {
+        setTimeout(waitForFinalReport, 500);
+      }
+    }
+
+    function processLiveEvent(ev) {
+      if (ev.event === 'start') {
+        liveStartTime = Date.now();
+        liveTotalExpected = ev.totalExpected || 0;
+        document.getElementById('live-progress-label').textContent = '0 / '+liveTotalExpected+' tests';
+      } else if (ev.event === 'test') {
+        if (ev.counters) updateLiveUI(ev.counters);
+        if (ev.status === 'failed') {
+          addLiveFailure(ev);
+        } else if (ev.retry > 0) {
+          // Test passed on retry (flaky) — remove failure entry
+          var rid = 'live-fail-' + (ev.testId || ev.title || '').replace(/[^a-zA-Z0-9]/g, '_');
+          var rem = document.getElementById(rid);
+          if (rem) rem.remove();
+        }
+      } else if (ev.event === 'complete') {
+        onLiveComplete(ev);
+      }
+    }
+
+    function disconnectSse() {
+      if (liveEventSource) {
+        liveEventSource.close();
+        liveEventSource = null;
+      }
+      if (livePollTimer) {
+        clearInterval(livePollTimer);
+        livePollTimer = null;
+      }
+    }
+
+    function connectSse() {
+      disconnectSse();
+      liveIgnoreEvents = false;
+      var sseUrl = '__SSE_URL__';
+      var useSse = sseUrl !== '__' + 'SSE_URL__';
+      if (useSse) {
+        liveEventSource = new EventSource(sseUrl);
+        liveEventSource.onmessage = function(e) {
+          if (liveIgnoreEvents) return;
+          try { processLiveEvent(JSON.parse(e.data)); } catch(_) {}
+        };
+      } else {
+        var lastLineCount = 0;
+        function pollLive() {
+          if (liveIgnoreEvents) return;
+          fetch(liveJsonlFile, { cache: 'no-store' })
+            .then(function(r) { return r.text(); })
+            .then(function(text) {
+              var lines = text.trim().split('\\n');
+              for (var i = lastLineCount; i < lines.length; i++) {
+                try { processLiveEvent(JSON.parse(lines[i])); } catch(_) {}
+              }
+              lastLineCount = lines.length;
+            })
+            .catch(function() {});
+        }
+        livePollTimer = setInterval(pollLive, 2000);
+        pollLive();
+      }
+    }
+
+    // ---- Filter state ----
+    var selectedTags = {};
+    var selectedFiles = {};
+    var selectedSuites = {};
+
+    // Run Tests button — shown when served with --run-command
+    var runEnabled = '__RUN_ENABLED__';
+    var runIsEnabled = (runEnabled === 'true');
+    var liveGated = document.querySelector('.live-section-gated') !== null;
+    // Gating is cosmetic (CSS + JS) — actual run capability requires server-side
+    // license validation on the /run endpoint.
+    if (runIsEnabled && !liveGated) {
+      var runRow = document.getElementById('live-run-row');
+      if (runRow) runRow.classList.remove('live-run-row-hidden');
+    }
+
+    function initFilterPanel() {
+      // Populate tags
+      var tagSet = {};
+      var fileSet = {};
+      var suiteSet = {};
+      for (var i = 0; i < tests.length; i++) {
+        var t = tests[i];
+        if (t.tags) for (var j = 0; j < t.tags.length; j++) tagSet[t.tags[j]] = true;
+        if (t.file) fileSet[t.file] = true;
+        if (t.suites) for (var k = 0; k < t.suites.length; k++) suiteSet[t.suites[k]] = true;
+        if (t.suite && !suiteSet[t.suite]) suiteSet[t.suite] = true;
+      }
+
+      // Tags chips
+      var tagsContainer = document.getElementById('live-filter-tags-chips');
+      if (tagsContainer) {
+        var tagKeys = Object.keys(tagSet).sort();
+        if (tagKeys.length === 0) {
+          tagsContainer.innerHTML = '<span style="font-size:0.75rem;color:var(--text-secondary)">No tags found</span>';
+        } else {
+          tagsContainer.innerHTML = tagKeys.map(function(tag) {
+            return '<button class="live-filter-chip" data-tag="'+escLive(tag)+'" onclick="toggleFilterChip(this,\\'tags\\')">'+escLive(tag)+'</button>';
+          }).join('');
+        }
+      }
+
+      // Files list
+      var filesContainer = document.getElementById('live-filter-files-list');
+      if (filesContainer) {
+        var fileKeys = Object.keys(fileSet).sort();
+        filesContainer.innerHTML = fileKeys.map(function(f, idx) {
+          var short = f.length > 60 ? '...' + f.slice(-57) : f;
+          return '<div class="live-filter-file-item"><input type="checkbox" id="ff-'+idx+'" checked data-file="'+escLive(f)+'" onchange="toggleFileFilter(this)"><label for="ff-'+idx+'" title="'+escLive(f)+'">'+escLive(short)+'</label></div>';
+        }).join('');
+        // Init all files as selected
+        for (var fi = 0; fi < fileKeys.length; fi++) selectedFiles[fileKeys[fi]] = true;
+      }
+
+      // Suites list
+      var suitesContainer = document.getElementById('live-filter-suites-list');
+      if (suitesContainer) {
+        var suiteKeys = Object.keys(suiteSet).sort();
+        if (suiteKeys.length === 0) {
+          suitesContainer.innerHTML = '<span style="font-size:0.75rem;color:var(--text-secondary)">No suites found</span>';
+        } else {
+          suitesContainer.innerHTML = suiteKeys.map(function(s, idx) {
+            return '<div class="live-filter-file-item"><input type="checkbox" id="fs-'+idx+'" checked data-suite="'+escLive(s)+'" onchange="toggleSuiteFilter(this)"><label for="fs-'+idx+'">'+escLive(s)+'</label></div>';
+          }).join('');
+          for (var si = 0; si < suiteKeys.length; si++) selectedSuites[suiteKeys[si]] = true;
+        }
+      }
+
+      updateFilterSummary();
+    }
+
+    window.toggleFilterPanel = function() {
+      var panel = document.getElementById('live-filter-panel');
+      var toggle = document.getElementById('live-filter-toggle');
+      if (!panel) return;
+      var show = panel.style.display === 'none';
+      panel.style.display = show ? 'block' : 'none';
+      if (toggle) toggle.classList.toggle('active', show);
+    };
+
+    window.toggleFilterSection = function(section) {
+      var body = document.getElementById('live-filter-body-' + section);
+      var chevron = document.getElementById('live-filter-chevron-' + section);
+      if (!body) return;
+      var show = body.style.display === 'none';
+      body.style.display = show ? '' : 'none';
+      if (chevron) chevron.classList.toggle('collapsed', !show);
+    };
+
+    window.toggleFilterChip = function(el, type) {
+      el.classList.toggle('selected');
+      var key = el.getAttribute('data-tag');
+      if (el.classList.contains('selected')) {
+        selectedTags[key] = true;
+      } else {
+        delete selectedTags[key];
+      }
+      cascadeFilters();
+    };
+
+    window.toggleFileFilter = function(el) {
+      var file = el.getAttribute('data-file');
+      if (el.checked) { selectedFiles[file] = true; } else { delete selectedFiles[file]; }
+      updateFilterSummary();
+    };
+
+    window.toggleSuiteFilter = function(el) {
+      var suite = el.getAttribute('data-suite');
+      if (el.checked) { selectedSuites[suite] = true; } else { delete selectedSuites[suite]; }
+      updateFilterSummary();
+    };
+
+    window.selectAllFiles = function(select) {
+      var checkboxes = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]');
+      for (var i = 0; i < checkboxes.length; i++) {
+        checkboxes[i].checked = select;
+        var f = checkboxes[i].getAttribute('data-file');
+        if (select) { selectedFiles[f] = true; } else { delete selectedFiles[f]; }
+      }
+      updateFilterSummary();
+    };
+
+    window.clearAllFilters = function() {
+      selectedTags = {};
+      document.querySelectorAll('.live-filter-chip.selected').forEach(function(c) { c.classList.remove('selected'); });
+      var grep = document.getElementById('live-filter-grep');
+      if (grep) grep.value = '';
+      selectAllFiles(true);
+      var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+      for (var i = 0; i < suiteBoxes.length; i++) {
+        suiteBoxes[i].checked = true;
+        var s = suiteBoxes[i].getAttribute('data-suite');
+        selectedSuites[s] = true;
+      }
+      updateFilterSummary();
+    };
+
+    // When tags or grep change, auto-select only files/suites containing matching tests
+    window.cascadeFilters = function() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var hasPrimary = grep || activeTags.length > 0;
+
+      if (!hasPrimary) {
+        // No primary filters — restore all files and suites
+        selectAllFiles(true);
+        var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+        for (var i = 0; i < suiteBoxes.length; i++) {
+          suiteBoxes[i].checked = true;
+          selectedSuites[suiteBoxes[i].getAttribute('data-suite')] = true;
+        }
+        updateFilterSummary();
+        return;
+      }
+
+      // Find files and suites that contain tests matching primary filters (tags + grep)
+      var matchingFiles = {};
+      var matchingSuites = {};
+      for (var i = 0; i < tests.length; i++) {
+        var t = tests[i];
+        var matchesPrimary = true;
+        // Check tag match
+        if (activeTags.length > 0) {
+          var tagHit = false;
+          if (t.tags) {
+            for (var j = 0; j < activeTags.length; j++) {
+              if (t.tags.indexOf(activeTags[j]) !== -1) { tagHit = true; break; }
+            }
+          }
+          if (!tagHit) matchesPrimary = false;
+        }
+        // Check grep match
+        if (matchesPrimary && grep && t.title && t.title.toLowerCase().indexOf(grep.toLowerCase()) === -1) {
+          matchesPrimary = false;
+        }
+        if (matchesPrimary) {
+          if (t.file) matchingFiles[t.file] = true;
+          if (t.suites) { for (var k = 0; k < t.suites.length; k++) matchingSuites[t.suites[k]] = true; }
+          if (t.suite) matchingSuites[t.suite] = true;
+        }
+      }
+
+      // Update file checkboxes
+      selectedFiles = {};
+      var fileBoxes = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]');
+      for (var fi = 0; fi < fileBoxes.length; fi++) {
+        var f = fileBoxes[fi].getAttribute('data-file');
+        var match = !!matchingFiles[f];
+        fileBoxes[fi].checked = match;
+        if (match) selectedFiles[f] = true;
+      }
+
+      // Update suite checkboxes
+      selectedSuites = {};
+      var suiteBoxes = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]');
+      for (var si = 0; si < suiteBoxes.length; si++) {
+        var s = suiteBoxes[si].getAttribute('data-suite');
+        var match = !!matchingSuites[s];
+        suiteBoxes[si].checked = match;
+        if (match) selectedSuites[s] = true;
+      }
+
+      updateFilterSummary();
+    };
+
+    window.updateFilterSummary = function() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var totalFiles = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]').length;
+      var checkedFiles = Object.keys(selectedFiles).length;
+      var totalSuites = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]').length;
+      var checkedSuites = Object.keys(selectedSuites).length;
+      var hasFilter = grep || activeTags.length > 0 || checkedFiles < totalFiles || checkedSuites < totalSuites;
+
+      // Count matching tests
+      var matching = 0;
+      for (var i = 0; i < tests.length; i++) {
+        if (testMatchesFilters(tests[i], grep, activeTags)) matching++;
+      }
+
+      var summary = document.getElementById('live-filter-summary');
+      if (summary) {
+        if (hasFilter) {
+          summary.textContent = matching + ' of ' + tests.length + ' tests selected';
+          summary.classList.remove('all-selected');
+        } else {
+          summary.textContent = 'All ' + tests.length + ' tests selected';
+          summary.classList.add('all-selected');
+        }
+      }
+      var clearBtn = document.getElementById('live-filter-clear');
+      if (clearBtn) clearBtn.style.display = hasFilter ? '' : 'none';
+
+      // Update section counts
+      var tc = document.getElementById('live-filter-tags-count');
+      if (tc) tc.textContent = activeTags.length > 0 ? activeTags.length : '';
+      var fc = document.getElementById('live-filter-files-count');
+      if (fc) fc.textContent = checkedFiles < totalFiles ? checkedFiles + '/' + totalFiles : '';
+      var sc = document.getElementById('live-filter-suites-count');
+      if (sc) sc.textContent = checkedSuites < totalSuites ? checkedSuites + '/' + totalSuites : '';
+    };
+
+    function testMatchesFilters(t, grep, activeTags) {
+      // File filter
+      if (t.file && !selectedFiles[t.file]) return false;
+      // Suite filter (AND: ALL of a test's suites must be selected)
+      if (t.suites && t.suites.length > 0) {
+        for (var i = 0; i < t.suites.length; i++) {
+          if (!selectedSuites[t.suites[i]]) return false;
+        }
+      } else if (t.suite && !selectedSuites[t.suite]) {
+        return false;
+      }
+      // Tag filter (OR: test must have at least one selected tag)
+      if (activeTags.length > 0) {
+        var tagMatch = false;
+        if (t.tags) {
+          for (var j = 0; j < activeTags.length; j++) {
+            if (t.tags.indexOf(activeTags[j]) !== -1) { tagMatch = true; break; }
+          }
+        }
+        if (!tagMatch) return false;
+      }
+      // Grep filter
+      if (grep && t.title && t.title.toLowerCase().indexOf(grep.toLowerCase()) === -1) return false;
+      return true;
+    }
+
+    function buildFilterPayload() {
+      var grep = (document.getElementById('live-filter-grep') || {}).value || '';
+      var activeTags = Object.keys(selectedTags);
+      var totalFiles = document.querySelectorAll('#live-filter-files-list input[type="checkbox"]').length;
+      var checkedFiles = Object.keys(selectedFiles);
+      var totalSuites = document.querySelectorAll('#live-filter-suites-list input[type="checkbox"]').length;
+      var checkedSuites = Object.keys(selectedSuites);
+
+      var payload = {};
+      // Only include files if not all are selected
+      if (checkedFiles.length < totalFiles && checkedFiles.length > 0) {
+        payload.files = checkedFiles;
+      }
+      // Build grep from tags + grep input
+      var grepParts = [];
+      if (activeTags.length > 0) {
+        grepParts.push(activeTags.join('|'));
+      }
+      if (grep) {
+        grepParts.push(grep);
+      }
+      if (grepParts.length > 0) {
+        payload.grep = grepParts.join('.*');
+      }
+      return payload;
+    }
+
+    function setRunButtonState(running) {
+      if (liveGated) return;
+      var btn = document.getElementById('live-run-btn');
+      var cancelBtn = document.getElementById('live-cancel-btn');
+      if (btn) btn.disabled = running;
+      if (cancelBtn) cancelBtn.style.display = running ? 'inline-block' : 'none';
+    }
+
+    function resetLiveUI() {
+      var ids = ['passed','failed','flaky','skipped'];
+      for (var i = 0; i < ids.length; i++) {
+        var cv = document.getElementById('live-counter-' + ids[i]);
+        if (cv) cv.textContent = '0';
+        var seg = document.getElementById('live-seg-' + ids[i]);
+        if (seg) seg.style.width = '0%';
+      }
+      var pl = document.getElementById('live-progress-label');
+      if (pl) pl.textContent = '0 / 0 tests';
+      var ff = document.getElementById('live-failure-feed');
+      if (ff) ff.innerHTML = '';
+      var elapsed = document.getElementById('live-elapsed');
+      if (elapsed) elapsed.textContent = '0s';
+    }
+
+    window.runTests = function() {
+      var btn = document.getElementById('live-run-btn');
+      if (!btn || btn.disabled) return;
+      setRunButtonState(true);
+      btn.textContent = 'Starting\u2026';
+
+      resetLiveUI();
+
+      liveCompleted = false;
+      liveTimerRunning = false;
+      liveTotalExpected = 0;
+
+      var b = document.getElementById('live-status-badge');
+      if (b) b.classList.add('running');
+      var st = document.getElementById('live-status-text');
+      if (st) st.textContent = 'Starting';
+      var nd = document.getElementById('live-nav-indicator');
+      if (nd) nd.classList.remove('stopped');
+
+      switchView('live');
+
+      var filterPayload = buildFilterPayload();
+      fetch('/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filterPayload)
+      })
+        .then(function(r) {
+          if (r.status === 409) {
+            setRunButtonState(false);
+            btn.textContent = 'Run Tests';
+            alert('A test run is already in progress');
+            return;
+          }
+          if (!r.ok) {
+            setRunButtonState(false);
+            btn.textContent = 'Run Tests';
+            alert('Failed to start tests (HTTP ' + r.status + ')');
+            return;
+          }
+          // Server accepted — now connect SSE to receive events
+          btn.textContent = 'Run Tests';
+          var stAfter = document.getElementById('live-status-text');
+          if (stAfter) stAfter.textContent = 'Running';
+          liveStartTime = Date.now();
+          liveTimerRunning = true;
+          tickLiveElapsed();
+          connectSse();
+        })
+        .catch(function() {
+          setRunButtonState(false);
+          btn.textContent = 'Run Tests';
+          alert('Failed to reach the server');
+        });
+    };
+
+    window.cancelTests = function() {
+      var cancelBtn = document.getElementById('live-cancel-btn');
+      if (cancelBtn) cancelBtn.disabled = true;
+      fetch('/run', { method: 'DELETE' })
+        .then(function(r) {
+          if (cancelBtn) cancelBtn.disabled = false;
+          if (r.ok) {
+            liveIgnoreEvents = true;
+            disconnectSse();
+            liveTimerRunning = false;
+            var st = document.getElementById('live-status-text');
+            if (st) st.textContent = 'Cancelled';
+            var b = document.getElementById('live-status-badge');
+            if (b) b.classList.remove('running');
+            var nd = document.getElementById('live-nav-indicator');
+            if (nd) nd.classList.add('stopped');
+            setRunButtonState(false);
+          } else {
+            r.json().then(function(j) { if (j.error) alert(j.error); }).catch(function() {});
+          }
+        })
+        .catch(function() {
+          if (cancelBtn) cancelBtn.disabled = false;
+          alert('Failed to reach the server');
+        });
+    };
+
+    // Initialize filter panel after all functions are defined
+    if (runIsEnabled) initFilterPanel();
+
+    // Auto-start: only when report is in live mode (during initial generation)
+    if (!isLiveMode) return;
+
+    switchView('live');
+
+    // Check actual server state before assuming "Running"
+    if (runIsEnabled) {
+      fetch('/run')
+        .then(function(r) { return r.json(); })
+        .then(function(state) {
+          if (state.running) {
+            var badge = document.getElementById('live-status-badge');
+            if (badge) badge.classList.add('running');
+            var statusText = document.getElementById('live-status-text');
+            if (statusText) statusText.textContent = 'Running';
+            liveTimerRunning = true;
+            liveStartTime = Date.now();
+            tickLiveElapsed();
+            setRunButtonState(true);
+            connectSse();
+          } else {
+            // Tests not running — show idle state with last exit code
+            var badge = document.getElementById('live-status-badge');
+            if (badge) badge.classList.remove('running');
+            var statusText = document.getElementById('live-status-text');
+            if (state.lastExitCode === 0) {
+              if (statusText) statusText.textContent = 'Completed';
+            } else if (state.lastExitCode === -1) {
+              if (statusText) statusText.textContent = 'Cancelled';
+            } else if (state.lastExitCode !== null) {
+              if (statusText) statusText.textContent = 'Failed (exit ' + state.lastExitCode + ')';
+            } else {
+              if (statusText) statusText.textContent = 'Idle';
+            }
+            var nd = document.getElementById('live-nav-indicator');
+            if (nd) nd.classList.add('stopped');
+            setRunButtonState(false);
+            connectSse();
+          }
+        })
+        .catch(function() {
+          // Can't reach server — fall back to SSE/polling
+          var badge = document.getElementById('live-status-badge');
+          if (badge) badge.classList.add('running');
+          var statusText = document.getElementById('live-status-text');
+          if (statusText) statusText.textContent = 'Running';
+          liveTimerRunning = true;
+          liveStartTime = Date.now();
+          tickLiveElapsed();
+          connectSse();
+        });
+    } else {
+      // No run endpoint available — just connect SSE for live display
+      var badge = document.getElementById('live-status-badge');
+      if (badge) badge.classList.add('running');
+      var statusText = document.getElementById('live-status-text');
+      if (statusText) statusText.textContent = 'Running';
+      liveTimerRunning = true;
+      liveStartTime = Date.now();
+      tickLiveElapsed();
+      connectSse();
+    }
+  })();
   </script>
+` : ''}
+${branding?.footer || !branding?.hidePoweredBy ? `  <footer class="report-footer" style="text-align:center;padding:12px 16px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border-subtle);">
+${branding?.footer ? `    <div>${escapeHtml(branding.footer)}</div>` : ''}
+${!branding?.hidePoweredBy ? '    <div>Powered by <a href="https://github.com/gary-parker/playwright-smart-reporter" style="color:var(--accent-blue);text-decoration:none;">Smart Reporter</a></div>' : ''}
+  </footer>` : ''}
 </body>
 </html>`;
+
+  return { html, css: externalCss, js: externalJs };
 }
 
 /**
  * Generate all CSS styles for the new app-shell layout
  */
-function generateStyles(passRate: number, cspSafe: boolean = false): string {
+function generateThemeOverrides(theme?: ThemeConfig): string {
+  if (!theme) return '';
+
+  const mappings: Array<[keyof ThemeConfig, string[]]> = [
+    ['primary', ['--accent-blue', '--accent-blue-dim']],
+    ['background', ['--bg-primary']],
+    ['surface', ['--bg-card', '--bg-secondary', '--bg-sidebar']],
+    ['text', ['--text-primary']],
+    ['accent', ['--accent-blue', '--accent-blue-dim']],
+    ['success', ['--accent-green', '--accent-green-dim']],
+    ['error', ['--accent-red', '--accent-red-dim']],
+    ['warning', ['--accent-yellow', '--accent-yellow-dim']],
+  ];
+
+  const HEX_COLOR = /^#[0-9a-fA-F]{3,8}$/;
+  const overrides: string[] = [];
+  for (const [key, vars] of mappings) {
+    const value = theme[key];
+    if (typeof value === 'string' && HEX_COLOR.test(value)) {
+      for (const v of vars) {
+        overrides.push(`      ${v}: ${value};`);
+      }
+    }
+  }
+
+  if (overrides.length === 0) return '';
+  return `\n    :root {\n${overrides.join('\n')}\n    }\n`;
+}
+
+const HIGH_CONTRAST_THEME = `
+    :root {
+      --bg-primary: #000000;
+      --bg-secondary: #0a0a0a;
+      --bg-card: #111111;
+      --bg-card-hover: #1a1a1a;
+      --bg-sidebar: #050505;
+      --border-subtle: #666666;
+      --border-glow: #888888;
+      --text-primary: #ffffff;
+      --text-secondary: #cccccc;
+      --text-muted: #999999;
+      --accent-green: #00ff00;
+      --accent-green-dim: #00cc00;
+      --accent-red: #ff0000;
+      --accent-red-dim: #dd0000;
+      --accent-yellow: #ffff00;
+      --accent-yellow-dim: #dddd00;
+      --accent-blue: #4488ff;
+      --accent-blue-dim: #2266dd;
+      --accent-purple: #cc88ff;
+      --accent-orange: #ff9944;
+    }
+    a { text-decoration: underline !important; }
+    .card, .stat-card, .test-item { border-width: 2px !important; }
+`;
+
+function generateStyles(passRate: number, cspSafe: boolean = false, theme?: ThemeConfig): string {
   // Font families - use system fonts in CSP-safe mode
   const primaryFont = cspSafe
     ? "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
@@ -970,6 +2165,10 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
   const monoFont = cspSafe
     ? "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace"
     : "'JetBrains Mono', ui-monospace, monospace";
+
+  // High-contrast preset overrides everything
+  const highContrastOverride = theme?.preset === 'high-contrast' ? HIGH_CONTRAST_THEME : '';
+  const customOverrides = theme?.preset !== 'high-contrast' ? generateThemeOverrides(theme) : '';
 
   return `    :root {
       --bg-primary: #0a0a0f;
@@ -995,6 +2194,7 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       --sidebar-width: 260px;
       --topbar-height: 56px;
     }
+${highContrastOverride}${customOverrides}
 
     /* Light theme - respects system preference */
     @media (prefers-color-scheme: light) {
@@ -1070,6 +2270,150 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       --accent-orange: #dd6622;
     }
 
+    /* Theme: Ocean */
+    :root[data-theme="ocean"] {
+      --bg-primary: #0b1628;
+      --bg-secondary: #0f1f38;
+      --bg-card: #152847;
+      --bg-card-hover: #1a3358;
+      --bg-sidebar: #091320;
+      --border-subtle: #1e3a5f;
+      --border-glow: #2a4f7a;
+      --text-primary: #d4e5f7;
+      --text-secondary: #7ba3c9;
+      --text-muted: #4a7a9f;
+      --accent-green: #00d4aa;
+      --accent-green-dim: #00a886;
+      --accent-red: #ff6b8a;
+      --accent-red-dim: #d44a6a;
+      --accent-yellow: #ffd166;
+      --accent-yellow-dim: #ccaa44;
+      --accent-blue: #00b4d8;
+      --accent-blue-dim: #0090ad;
+      --accent-purple: #8ea4f2;
+      --accent-orange: #ff9e6d;
+    }
+
+    /* Theme: Sunset */
+    :root[data-theme="sunset"] {
+      --bg-primary: #1a0f0a;
+      --bg-secondary: #241510;
+      --bg-card: #2e1c14;
+      --bg-card-hover: #3a241a;
+      --bg-sidebar: #140c08;
+      --border-subtle: #4a3028;
+      --border-glow: #5f3e32;
+      --text-primary: #f5e6dc;
+      --text-secondary: #c9a08a;
+      --text-muted: #8a6a55;
+      --accent-green: #7ecf8a;
+      --accent-green-dim: #5aad66;
+      --accent-red: #ff6b6b;
+      --accent-red-dim: #d44a4a;
+      --accent-yellow: #ffc857;
+      --accent-yellow-dim: #cca040;
+      --accent-blue: #6eb5ff;
+      --accent-blue-dim: #4a90d4;
+      --accent-purple: #c084fc;
+      --accent-orange: #ff8c42;
+    }
+
+    /* Theme: Dracula */
+    :root[data-theme="dracula"] {
+      --bg-primary: #282a36;
+      --bg-secondary: #21222c;
+      --bg-card: #343746;
+      --bg-card-hover: #3e4155;
+      --bg-sidebar: #1e1f29;
+      --border-subtle: #44475a;
+      --border-glow: #555870;
+      --text-primary: #f8f8f2;
+      --text-secondary: #bfbfb0;
+      --text-muted: #6272a4;
+      --accent-green: #50fa7b;
+      --accent-green-dim: #3ad462;
+      --accent-red: #ff5555;
+      --accent-red-dim: #d43d3d;
+      --accent-yellow: #f1fa8c;
+      --accent-yellow-dim: #c9d46e;
+      --accent-blue: #8be9fd;
+      --accent-blue-dim: #62c4d8;
+      --accent-purple: #bd93f9;
+      --accent-orange: #ffb86c;
+    }
+
+    /* Theme: Cyberpunk */
+    :root[data-theme="cyberpunk"] {
+      --bg-primary: #0a0014;
+      --bg-secondary: #110022;
+      --bg-card: #1a0033;
+      --bg-card-hover: #220044;
+      --bg-sidebar: #08000f;
+      --border-subtle: #2d0055;
+      --border-glow: #4400aa;
+      --text-primary: #e0d0ff;
+      --text-secondary: #a080cc;
+      --text-muted: #6644aa;
+      --accent-green: #00ff9f;
+      --accent-green-dim: #00cc7f;
+      --accent-red: #ff0055;
+      --accent-red-dim: #cc0044;
+      --accent-yellow: #ffee00;
+      --accent-yellow-dim: #ccbb00;
+      --accent-blue: #00ccff;
+      --accent-blue-dim: #00aadd;
+      --accent-purple: #cc00ff;
+      --accent-orange: #ff6600;
+    }
+
+    /* Theme: Forest */
+    :root[data-theme="forest"] {
+      --bg-primary: #0c1a0e;
+      --bg-secondary: #112416;
+      --bg-card: #182e1c;
+      --bg-card-hover: #1e3a22;
+      --bg-sidebar: #091408;
+      --border-subtle: #254a2a;
+      --border-glow: #305a36;
+      --text-primary: #d4ecd8;
+      --text-secondary: #88b890;
+      --text-muted: #557a5c;
+      --accent-green: #4ade80;
+      --accent-green-dim: #38b866;
+      --accent-red: #f87171;
+      --accent-red-dim: #cc5555;
+      --accent-yellow: #fbbf24;
+      --accent-yellow-dim: #cc9a1a;
+      --accent-blue: #67c9e0;
+      --accent-blue-dim: #48a6bc;
+      --accent-purple: #a78bfa;
+      --accent-orange: #fb923c;
+    }
+
+    /* Theme: Rose */
+    :root[data-theme="rose"] {
+      --bg-primary: #1a0a14;
+      --bg-secondary: #24101c;
+      --bg-card: #2e1626;
+      --bg-card-hover: #3a1c30;
+      --bg-sidebar: #140810;
+      --border-subtle: #4a2840;
+      --border-glow: #5f3452;
+      --text-primary: #f5dce8;
+      --text-secondary: #c990af;
+      --text-muted: #8a5a74;
+      --accent-green: #6ee7b7;
+      --accent-green-dim: #4fbc94;
+      --accent-red: #fb7185;
+      --accent-red-dim: #d45468;
+      --accent-yellow: #fcd34d;
+      --accent-yellow-dim: #ccaa3a;
+      --accent-blue: #93c5fd;
+      --accent-blue-dim: #6da0d8;
+      --accent-purple: #e879f9;
+      --accent-orange: #fdba74;
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     button {
@@ -1123,6 +2467,7 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       justify-content: space-between;
       padding: 0 1rem;
       background: var(--bg-secondary);
+      position: relative;
       border-bottom: 1px solid var(--border-subtle);
       z-index: 100;
     }
@@ -1186,6 +2531,13 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       width: 32px;
       height: 32px;
       object-fit: contain;
+    }
+
+    .logo-image {
+      height: 28px;
+      width: auto;
+      object-fit: contain;
+      margin-right: 8px;
     }
 
     .logo-text {
@@ -1707,6 +3059,237 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     }
 
     /* ============================================
+       LIVE VIEW
+    ============================================ */
+    .live-nav-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent-green);
+      animation: livePulse 1.5s ease-in-out infinite;
+      margin-left: auto;
+    }
+    .live-nav-dot.stopped { animation: none; opacity: 0.3; }
+    @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .view-header { display: flex; align-items: center; gap: 0.75rem; }
+    .live-header-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em; padding: 4px 10px; border-radius: 6px;
+      background: rgba(34,197,94,0.12); color: var(--accent-green);
+      border: 1px solid rgba(34,197,94,0.25);
+    }
+    .live-header-badge.running {
+      background: rgba(239,68,68,0.12); color: var(--accent-red);
+      border-color: rgba(239,68,68,0.25);
+    }
+    .live-header-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent-green);
+    }
+    .live-header-badge.running .live-header-dot {
+      background: var(--accent-red);
+      animation: livePulse 1.5s ease-in-out infinite;
+    }
+
+    .live-run-row {
+      padding: 0.75rem 1.5rem; display: flex; align-items: center;
+    }
+    .live-run-btn {
+      padding: 0.5rem 1.25rem; border: none; border-radius: 6px;
+      background: var(--accent-green); color: #fff; font-weight: 600;
+      font-size: 0.85rem; cursor: pointer; transition: opacity 0.2s;
+    }
+    .live-run-btn:hover { opacity: 0.85; }
+    .live-run-btn:disabled {
+      opacity: 0.5; cursor: not-allowed;
+    }
+    .live-run-btn:disabled::before {
+      content: ''; display: inline-block; width: 12px; height: 12px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      margin-right: 6px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .live-cancel-btn {
+      padding: 0.5rem 1.25rem; border: none; border-radius: 6px;
+      background: var(--accent-red); color: #fff; font-weight: 600;
+      font-size: 0.85rem; cursor: pointer; transition: opacity 0.2s;
+      margin-left: 0.5rem;
+    }
+    .live-cancel-btn:hover { opacity: 0.85; }
+
+    .live-filter-summary {
+      font-size: 0.8rem; color: var(--accent-yellow); margin-left: 0.5rem;
+      font-weight: 500; white-space: nowrap;
+    }
+    .live-filter-summary.all-selected {
+      color: var(--text-secondary);
+    }
+    .live-filter-toggle {
+      margin-left: auto; padding: 0.4rem 0.75rem; border: 1px solid var(--border-subtle);
+      border-radius: 6px; background: none; color: var(--text-secondary);
+      font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .live-filter-toggle:hover { border-color: var(--text-primary); color: var(--text-primary); }
+    .live-filter-toggle.active { border-color: var(--accent-green); color: var(--accent-green); }
+
+    .live-filter-panel {
+      border-top: 1px solid var(--border-subtle); padding: 1rem 1.5rem;
+      margin-top: 0.25rem;
+      background: var(--bg-card); max-height: 300px; overflow-y: auto;
+    }
+    .live-filter-section {
+      margin-bottom: 0.5rem;
+    }
+    .live-filter-section-header {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+      cursor: pointer; padding: 0.35rem 0; user-select: none;
+    }
+    .live-filter-section-header:hover { color: var(--text-primary); }
+    .live-filter-chevron { margin-left: auto; display: flex; transition: transform 0.2s; }
+    .live-filter-chevron.collapsed { transform: rotate(-90deg); }
+    .live-filter-count {
+      font-size: 0.7rem; background: var(--accent-green); color: #fff;
+      border-radius: 10px; padding: 0 6px; font-weight: 700; min-width: 18px;
+      text-align: center; line-height: 1.4;
+    }
+    .live-filter-count:empty { display: none; }
+    .live-filter-section-body { padding: 0.25rem 0 0.5rem; }
+
+    .live-filter-grep-input {
+      width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--border-subtle);
+      border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);
+      font-size: 0.8rem; font-family: inherit; outline: none;
+    }
+    .live-filter-grep-input:focus { border-color: var(--accent-green); }
+
+    .live-filter-chips {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .live-filter-chip {
+      padding: 0.25rem 0.6rem; border: 1px solid var(--border-subtle);
+      border-radius: 14px; font-size: 0.75rem; cursor: pointer;
+      color: var(--text-secondary); background: none;
+      transition: all 0.15s; user-select: none;
+    }
+    .live-filter-chip:hover { border-color: var(--text-primary); color: var(--text-primary); }
+    .live-filter-chip.selected {
+      background: var(--accent-green); border-color: var(--accent-green);
+      color: #fff; font-weight: 600;
+    }
+
+    .live-filter-file-actions {
+      display: flex; gap: 6px; margin-bottom: 6px;
+    }
+    .live-filter-action-btn {
+      padding: 0.2rem 0.5rem; border: 1px solid var(--border-subtle);
+      border-radius: 4px; font-size: 0.7rem; cursor: pointer;
+      background: none; color: var(--text-secondary);
+    }
+    .live-filter-action-btn:hover { color: var(--text-primary); border-color: var(--text-primary); }
+
+    .live-filter-file-list {
+      display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto;
+    }
+    .live-filter-file-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; color: var(--text-secondary); padding: 0.2rem 0;
+      cursor: pointer; user-select: none;
+    }
+    .live-filter-file-item:hover { color: var(--text-primary); }
+    .live-filter-file-item input[type="checkbox"] {
+      accent-color: var(--accent-green); margin: 0;
+    }
+    .live-filter-file-item label { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .live-filter-bar-actions { padding-top: 0.25rem; }
+    .live-filter-clear-btn {
+      padding: 0.3rem 0.75rem; border: none; border-radius: 6px;
+      background: rgba(239,68,68,0.15); color: var(--accent-red);
+      font-size: 0.75rem; font-weight: 600; cursor: pointer;
+    }
+    .live-filter-clear-btn:hover { background: rgba(239,68,68,0.25); }
+
+    .live-content { padding: 1.5rem; }
+    .live-elapsed-row {
+      display: flex; align-items: center; gap: 0.75rem;
+      margin-bottom: 1rem; font-size: 0.875rem;
+    }
+    .live-elapsed-label { color: var(--text-muted); }
+    .live-elapsed-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+    .live-progress-track {
+      background: var(--bg-card); border-radius: 8px;
+      height: 24px; overflow: hidden; display: flex;
+      margin-bottom: 0.5rem;
+    }
+    .live-seg { height: 100%; transition: width 0.3s ease; }
+    .live-seg-passed { background: var(--accent-green); }
+    .live-seg-failed { background: var(--accent-red); }
+    .live-seg-flaky { background: var(--accent-yellow); }
+    .live-seg-skipped { background: var(--accent-slate, #64748b); }
+    .live-progress-label {
+      text-align: center; font-size: 0.8rem;
+      color: var(--text-muted); margin-bottom: 1.5rem;
+    }
+
+    .live-counters {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1rem; margin-bottom: 2rem;
+    }
+    .live-counter-card {
+      background: var(--bg-card); border-radius: 8px;
+      padding: 1rem; text-align: center;
+    }
+    .live-counter-value { font-size: 2rem; font-weight: 700; }
+    .live-counter-label {
+      font-size: 0.7rem; color: var(--text-muted);
+      text-transform: uppercase; margin-top: 4px; letter-spacing: 0.05em;
+    }
+    .live-c-passed .live-counter-value { color: var(--accent-green); }
+    .live-c-failed .live-counter-value { color: var(--accent-red); }
+    .live-c-flaky .live-counter-value { color: var(--accent-yellow); }
+    .live-c-skipped .live-counter-value { color: var(--accent-slate, #64748b); }
+
+    .live-failure-section h3 { font-size: 1rem; margin-bottom: 0.75rem; }
+    .live-failure-item {
+      background: var(--bg-card); border-left: 4px solid var(--accent-red);
+      border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 0.5rem;
+    }
+    .live-failure-title { font-weight: 600; font-size: 0.875rem; }
+    .live-failure-file { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+    .live-failure-error {
+      font-size: 0.8rem; color: var(--accent-red); margin-top: 6px;
+      font-family: ${monoFont}; white-space: pre-wrap;
+      max-height: 80px; overflow: hidden;
+    }
+    .live-failure-clickable { cursor: pointer; transition: background 0.15s; }
+    .live-failure-clickable:hover { background: var(--bg-hover, rgba(128,128,128,0.1)); }
+    .live-failure-item-main { display: flex; gap: 0.75rem; align-items: flex-start; }
+    .live-failure-item-text { flex: 1; min-width: 0; }
+    .live-failure-thumb {
+      width: 64px; height: 48px; object-fit: cover; border-radius: 4px;
+      border: 1px solid var(--border-subtle); flex-shrink: 0;
+    }
+    .live-failure-view-link {
+      display: block; margin-top: 6px; font-size: 0.75rem;
+      color: var(--accent-blue); font-weight: 500;
+    }
+    .live-failure-pending-label {
+      display: block; margin-top: 6px; font-size: 0.7rem;
+      color: var(--text-muted); font-style: italic;
+    }
+    .live-run-row-hidden { display: none; }
+    .live-section-gated {
+      opacity: 0.4 !important; pointer-events: auto; filter: grayscale(0.6);
+      user-select: none; animation: none !important; cursor: pointer;
+    }
+    .live-section-gated * { pointer-events: none; }
+    .live-section-gated .live-run-row { display: flex; }
+
+    /* ============================================
        OVERVIEW VIEW
     ============================================ */
     .overview-content {
@@ -1798,12 +3381,6 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       border: 1px solid var(--border-subtle);
       border-radius: 16px;
       padding: 1.25rem;
-      transition: all 0.2s;
-    }
-
-    .hero-stat-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
     }
 
     .hero-stat-card.health {
@@ -2184,12 +3761,6 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
       cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .insight-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
     }
 
     .insight-icon {
@@ -2436,7 +4007,10 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      flex-shrink: 0;
+      flex-shrink: 1;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 60%;
     }
 
     .test-item-duration {
@@ -2456,6 +4030,7 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     .test-item-badge.flaky { background: rgba(255, 204, 0, 0.15); color: var(--accent-yellow); }
     .test-item-badge.slow { background: rgba(255, 136, 68, 0.15); color: var(--accent-orange); }
     .test-item-badge.new { background: rgba(0, 170, 255, 0.15); color: var(--accent-blue); }
+    .test-item-badge.quarantined { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); font-weight: 600; }
     
     /* Attention badges - more prominent */
     .test-item-badge.new-failure { 
@@ -2789,7 +4364,8 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       transform: rotate(-90deg);
     }
 
-    .collapsible-section.collapsed .section-content {
+    .collapsible-section.collapsed .section-content,
+    .collapsible-section.collapsed .trend-controls {
       display: none;
     }
 
@@ -3705,6 +5281,9 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     }
 
     .test-browser-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
       font-family: ${monoFont};
       font-size: 0.6rem;
       padding: 0.15rem 0.4rem;
@@ -3728,6 +5307,9 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     }
 
     .test-annotation-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
       font-family: ${monoFont};
       font-size: 0.6rem;
       padding: 0.15rem 0.4rem;
@@ -3774,6 +5356,439 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       background: #ecfdf5;
       color: #059669;
       border: 1px solid #6ee7b7;
+    }
+
+    .test-annotation-badge.annotation-quarantine {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--accent-yellow);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      font-weight: 500;
+    }
+
+    /* Quarantine filter chip */
+    .filter-chip.attention-quarantine { border-color: rgba(245, 158, 11, 0.4); }
+    .filter-chip.attention-quarantine:hover:not(.active) {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--accent-yellow);
+      border-color: var(--accent-yellow);
+    }
+    .filter-chip.attention-quarantine.active {
+      background: var(--accent-yellow);
+      color: var(--bg-primary);
+      border-color: var(--accent-yellow);
+    }
+
+    /* ============================================
+       AI HEALTH SUMMARY CARD
+    ============================================ */
+    .ai-health-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      border-left: 4px solid var(--accent-purple);
+      position: relative;
+    }
+    .ai-health-card.pro-feature-placeholder {
+      opacity: 0.4;
+    }
+    .ai-health-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .ai-health-title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .ai-health-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+    }
+    .ai-health-body {
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: var(--text-secondary);
+    }
+    .ai-health-body p { margin: 0 0 0.5rem; }
+    .ai-health-body p:last-child { margin-bottom: 0; }
+    .ai-health-placeholder-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* ============================================
+       QUALITY GATE CARD
+    ============================================ */
+    .quality-gate-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      border-left: 4px solid var(--border-subtle);
+      position: relative;
+      overflow: hidden;
+    }
+    .quality-gate-card.gate-passed { border-left-color: var(--accent-green); }
+    .quality-gate-card.gate-failed { border-left-color: var(--accent-red); }
+    .quality-gate-card.pro-feature-placeholder {
+      opacity: 0.4;
+      border-left-color: var(--accent-purple);
+    }
+
+    .gate-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      position: relative;
+    }
+    .gate-title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .gate-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      color: var(--text-primary);
+    }
+    .gate-status {
+      font-family: ${monoFont};
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .gate-status-passed { background: rgba(0, 255, 136, 0.15); color: var(--accent-green); }
+    .gate-status-failed { background: rgba(255, 68, 102, 0.15); color: var(--accent-red); }
+
+    .gate-rules { display: flex; flex-direction: column; gap: 0.35rem; position: relative; }
+    .gate-rule-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: ${monoFont};
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+    .gate-rule-icon { font-size: 0.85rem; width: 1.2em; text-align: center; }
+    .gate-rule-icon.gate-pass { color: var(--accent-green); }
+    .gate-rule-icon.gate-fail { color: var(--accent-red); }
+    .gate-rule-icon.gate-skipped { color: var(--text-muted); }
+    .gate-rule-name { flex: 1; }
+    .gate-rule-values { color: var(--text-muted); white-space: nowrap; }
+
+    /* Background sparkline charts */
+    .sparkline-bg {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 60%;
+      pointer-events: none;
+    }
+
+    .gate-placeholder-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* ============================================
+       QUARANTINE CARD
+    ============================================ */
+    .quarantine-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      border-left: 4px solid rgba(245, 158, 11, 0.6);
+      position: relative;
+      overflow: hidden;
+    }
+    .quarantine-card.pro-feature-placeholder {
+      opacity: 0.4;
+      border-left-color: var(--accent-purple);
+    }
+
+    .quarantine-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+      position: relative;
+    }
+    .quarantine-title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .quarantine-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      color: var(--text-primary);
+    }
+    .quarantine-count {
+      font-family: ${monoFont};
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--accent-yellow);
+    }
+    .quarantine-threshold {
+      font-family: ${monoFont};
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+    .quarantine-entries { display: flex; flex-direction: column; gap: 0.25rem; position: relative; }
+    .quarantine-entry {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.75rem;
+      padding: 0.15rem 0;
+    }
+    .quarantine-entry-title {
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      margin-right: 0.5rem;
+    }
+    .quarantine-entry-score {
+      font-family: ${monoFont};
+      color: var(--accent-yellow);
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    .quarantine-more {
+      font-size: 0.7rem;
+      color: var(--accent-blue);
+      cursor: pointer;
+      margin-top: 0.25rem;
+    }
+    .quarantine-more:hover { text-decoration: underline; }
+    .quarantine-placeholder-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* Gated feature placeholders — clickable for upgrade modal */
+    .gated-clickable { cursor: pointer; transition: opacity 0.2s; }
+    .gated-clickable:hover { opacity: 0.6; }
+
+    /* ============================================
+       UPGRADE CTA BANNER
+    ============================================ */
+    .upgrade-banner {
+      background: linear-gradient(135deg, var(--accent-purple), #6366f1);
+      border-radius: 12px;
+      padding: 0.75rem 1.25rem;
+      margin-bottom: 1.25rem;
+      animation: upgradeBannerSlideIn 0.4s ease-out;
+    }
+    @keyframes upgradeBannerSlideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .upgrade-banner-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .upgrade-banner-text {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #fff;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    .upgrade-banner-icon { flex-shrink: 0; color: #fbbf24; }
+    .upgrade-banner-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+    .upgrade-banner-btn {
+      display: inline-block;
+      background: #fff;
+      color: #6366f1;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.4rem 1rem;
+      border-radius: 6px;
+      text-decoration: none;
+      transition: background 0.2s;
+    }
+    .upgrade-banner-btn:hover { background: #f0f0ff; }
+    .upgrade-banner-dismiss {
+      background: none;
+      border: none;
+      color: rgba(255,255,255,0.7);
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 0 0.25rem;
+      line-height: 1;
+    }
+    .upgrade-banner-dismiss:hover { color: #fff; }
+
+    /* ============================================
+       UPGRADE MODAL
+    ============================================ */
+    .upgrade-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: modalFadeIn 0.2s ease-out;
+    }
+    @keyframes modalFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .upgrade-modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 2rem;
+      max-width: 420px;
+      width: 90%;
+      text-align: center;
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.3);
+      animation: modalSlideUp 0.25s ease-out;
+    }
+    @keyframes modalSlideUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .upgrade-modal-close {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .upgrade-modal-close:hover { color: var(--text-primary); }
+    .upgrade-modal-icon {
+      color: var(--accent-purple);
+      margin-bottom: 0.75rem;
+    }
+    .upgrade-modal-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 0 0 0.5rem;
+    }
+    .upgrade-modal-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+      margin: 0 0 1.25rem;
+    }
+    .upgrade-modal-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+    }
+    .upgrade-modal-btn {
+      padding: 0.5rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      border: none;
+      transition: all 0.2s;
+    }
+    .upgrade-modal-btn.primary {
+      background: var(--accent-purple);
+      color: #fff;
+    }
+    .upgrade-modal-btn.primary:hover { filter: brightness(1.15); }
+    .upgrade-modal-btn.secondary {
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+    }
+    .upgrade-modal-btn.secondary:hover { background: var(--border-subtle); }
+
+    /* ============================================
+       FEATURE USAGE CARD
+    ============================================ */
+    .feature-usage-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      border-left: 4px solid var(--accent-purple);
+    }
+    .feature-usage-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .feature-usage-title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .feature-usage-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+    }
+    .feature-usage-upgrade-link {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--accent-purple);
+      text-decoration: none;
+    }
+    .feature-usage-upgrade-link:hover { text-decoration: underline; }
+    .feature-usage-columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .feature-usage-col-header {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .active-header { color: var(--accent-green); }
+    .locked-header { color: var(--accent-purple); }
+    .feature-usage-item {
+      font-size: 0.78rem;
+      padding: 0.2rem 0;
+      color: var(--text-secondary);
+    }
+    .feature-usage-item.locked {
+      color: var(--text-muted);
     }
 
     .suite-chips .filter-chip,
@@ -4711,6 +6726,9 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     }
 
     .gallery-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
       font-size: 1rem;
       font-weight: 600;
       color: var(--text-primary);
@@ -4723,6 +6741,9 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     }
 
     .gallery-filter-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
       font-family: ${monoFont};
       font-size: 0.75rem;
       padding: 0.4rem 0.8rem;
@@ -5003,6 +7024,9 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     }
 
     .comparison-title {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
       font-size: 1rem;
       font-weight: 600;
       color: var(--text-primary);
@@ -5479,8 +7503,10 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     }
 
     /* ============================================
-       MOBILE RESPONSIVE - PERSISTENT SIDEBAR
+       MOBILE RESPONSIVE
     ============================================ */
+
+    /* --- Tablet (768px) --- */
     @media (max-width: 768px) {
       :root {
         --sidebar-width: 200px;
@@ -5502,7 +7528,6 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
         width: var(--sidebar-width);
       }
 
-      /* Hide overlay on mobile - sidebar is persistent */
       .sidebar-overlay {
         display: none;
       }
@@ -5515,11 +7540,19 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
         display: none;
       }
 
+      .search-trigger {
+        min-width: 44px;
+        padding: 0.4rem;
+      }
+
+      .timestamp {
+        display: none;
+      }
+
       .filter-chips {
         flex-wrap: wrap;
       }
 
-      /* Compact sidebar elements */
       .sidebar-progress {
         padding: 0.75rem;
       }
@@ -5564,6 +7597,266 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       .mini-stat-label {
         font-size: 0.55rem;
       }
+
+      .hero-stats {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+
+      .master-detail-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .test-list-panel {
+        max-height: 50vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+
+      .gallery-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 0.75rem;
+      }
+
+      .comparison-summary {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .comparison-item-details {
+        flex-wrap: wrap;
+        font-size: 0.7rem;
+      }
+
+      .trend-chart {
+        height: 100px;
+      }
+
+      .network-entry-header {
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .network-url {
+        font-size: 11px;
+      }
+    }
+
+    /* --- Phone (600px) --- */
+    @media (max-width: 600px) {
+      :root {
+        --sidebar-width: 0px;
+      }
+
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 260px;
+        height: 100vh;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        z-index: 200;
+        background: var(--bg-primary);
+      }
+
+      .app-shell:not(.sidebar-collapsed) .sidebar {
+        transform: translateX(0);
+      }
+
+      .sidebar-overlay {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 199;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s;
+      }
+
+      .app-shell:not(.sidebar-collapsed) .sidebar-overlay {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .app-shell.sidebar-collapsed .sidebar {
+        transform: translateX(-100%);
+      }
+
+      .sidebar-toggle {
+        display: flex;
+      }
+
+      .top-bar {
+        padding: 0 0.5rem;
+        gap: 0.25rem;
+      }
+
+      .overview-content {
+        padding: 1rem;
+      }
+
+      .view-header {
+        padding: 0.75rem 1rem;
+      }
+    }
+
+    /* --- Small phone (480px) --- */
+    @media (max-width: 480px) {
+      .hero-stats {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+      }
+
+      .hero-stat-card {
+        padding: 0.75rem;
+      }
+
+      .hero-stat-value, .health-value {
+        font-size: 1.25rem;
+      }
+
+      .hero-stat-label {
+        font-size: 0.7rem;
+      }
+
+      .hero-stat-detail {
+        font-size: 0.65rem;
+      }
+
+      .health-gauge {
+        width: 60px;
+        height: 60px;
+      }
+
+      .health-grade {
+        font-size: 0.9rem;
+      }
+
+      .stat-card.large {
+        padding: 0.75rem;
+        gap: 0.5rem;
+      }
+
+      .stat-icon {
+        width: 36px;
+        height: 36px;
+        font-size: 1rem;
+      }
+
+      .detail-title {
+        font-size: 1rem;
+      }
+
+      .upgrade-banner {
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 1rem;
+      }
+
+      .upgrade-banner-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+      }
+
+      .upgrade-banner-text {
+        font-size: 0.78rem;
+      }
+
+      .upgrade-banner-actions {
+        width: 100%;
+      }
+
+      .upgrade-banner-btn {
+        flex: 1;
+        text-align: center;
+      }
+
+      .upgrade-modal {
+        width: 95%;
+        padding: 1.25rem;
+      }
+
+      .upgrade-modal-title {
+        font-size: 1rem;
+      }
+
+      .upgrade-modal-desc {
+        font-size: 0.8rem;
+      }
+
+      .feature-usage-columns {
+        grid-template-columns: 1fr;
+      }
+
+      .gallery-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .gallery-section {
+        padding: 1rem;
+      }
+
+      .gallery-item-preview {
+        height: 120px;
+      }
+
+      .comparison-summary {
+        grid-template-columns: 1fr;
+      }
+
+      .comparison-item-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .comparison-card-value {
+        font-size: 1.25rem;
+      }
+
+      .trend-chart {
+        height: 80px;
+        padding: 12px 8px 8px;
+      }
+
+      .secondary-trends-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .insight-card {
+        padding: 0.75rem;
+      }
+
+      .insight-icon {
+        display: none;
+      }
+
+      .export-menu, .theme-menu {
+        position: fixed;
+        right: 0;
+        top: 48px;
+        max-height: calc(100vh - 48px);
+        width: 100vw;
+        max-width: 280px;
+        border-radius: 0 0 0 12px;
+        z-index: 1001;
+      }
+
+      .step-title {
+        font-size: 0.7rem;
+      }
+
+      .step-duration {
+        font-size: 0.7rem;
+        min-width: auto;
+      }
+
+      .mini-bars { gap: 0.25rem; }
+      .mini-bar-label { font-size: 0.65rem; }
+      .mini-bar-value { font-size: 0.65rem; }
     }
 
     /* ============================================
@@ -5594,6 +7887,164 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
     @keyframes slideDown {
       from { opacity: 0; max-height: 0; }
       to { opacity: 1; max-height: 2000px; }
+    }
+
+    /* ============================================
+       DESIGN ENHANCEMENTS
+    ============================================ */
+
+    /* 1. Animated counter shimmer on hero stat values */
+    .hero-stat-value[data-target] {
+      display: inline-block;
+    }
+
+    /* 2. Staggered test list entrance (initial load only via .animate-entrance) */
+    @keyframes listItemIn {
+      from { opacity: 0; transform: translateX(-12px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .test-list-item.animate-entrance {
+      animation: listItemIn 0.3s ease both;
+    }
+    .test-list-item.animate-entrance:nth-child(1) { animation-delay: 0s; }
+    .test-list-item.animate-entrance:nth-child(2) { animation-delay: 0.03s; }
+    .test-list-item.animate-entrance:nth-child(3) { animation-delay: 0.06s; }
+    .test-list-item.animate-entrance:nth-child(4) { animation-delay: 0.09s; }
+    .test-list-item.animate-entrance:nth-child(5) { animation-delay: 0.12s; }
+    .test-list-item.animate-entrance:nth-child(6) { animation-delay: 0.15s; }
+    .test-list-item.animate-entrance:nth-child(7) { animation-delay: 0.18s; }
+    .test-list-item.animate-entrance:nth-child(8) { animation-delay: 0.21s; }
+    .test-list-item.animate-entrance:nth-child(9) { animation-delay: 0.24s; }
+    .test-list-item.animate-entrance:nth-child(10) { animation-delay: 0.27s; }
+    .test-list-item.animate-entrance:nth-child(n+11) { animation-delay: 0.3s; }
+
+    /* 3. Glassmorphism hero cards */
+    .hero-stat-card {
+      background: linear-gradient(135deg, rgba(26, 26, 36, 0.7), rgba(26, 26, 36, 0.4));
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]):not([data-theme="dracula"]):not([data-theme="cyberpunk"]) .hero-stat-card {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+      }
+    }
+    :root[data-theme="light"] .hero-stat-card {
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+
+    /* 4. Gradient accent bar on topbar */
+    .top-bar::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent-green), var(--accent-blue), var(--accent-purple));
+      opacity: 0.6;
+    }
+
+    /* 5. Enhanced hover interactions */
+    .hero-stat-card:hover {
+      transform: translateY(-4px) scale(1.01);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+    .hero-stat-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+
+    .insight-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .insight-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    /* 6. Progress ring animation on scroll */
+    @keyframes ringFill {
+      from { stroke-dasharray: 0 264; }
+    }
+    .progress-ring-fill.animate {
+      animation: ringFill 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+    .health-ring-fill.animate {
+      animation: ringFill 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    /* 7. Smooth view transitions (crossfade) */
+    .view-panel {
+      animation: viewFadeIn 0.25s ease;
+    }
+    @keyframes viewFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 8. Status-aware header accent */
+    .top-bar.status-all-pass::after {
+      background: linear-gradient(90deg, var(--accent-green), var(--accent-green), transparent);
+      opacity: 0.8;
+    }
+    .top-bar.status-has-failures::after {
+      background: linear-gradient(90deg, var(--accent-red), var(--accent-orange), transparent);
+      opacity: 0.8;
+    }
+    .top-bar.status-has-flaky::after {
+      background: linear-gradient(90deg, var(--accent-yellow), var(--accent-green), transparent);
+      opacity: 0.6;
+    }
+
+    /* 9. Micro-interactions */
+    @keyframes badgeBounce {
+      0% { transform: scale(0); opacity: 0; }
+      60% { transform: scale(1.15); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .test-item-badge {
+      animation: badgeBounce 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+
+    @keyframes countUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .hero-stat-value {
+      animation: countUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+      animation-delay: 0.2s;
+    }
+
+    .mini-bar {
+      animation: barGrow 0.8s cubic-bezier(0.4, 0, 0.2, 1) both;
+      animation-delay: 0.3s;
+    }
+    @keyframes barGrow {
+      from { width: 0; }
+    }
+
+    /* Hero stats stagger */
+    .hero-stat-card:nth-child(1) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0s; }
+    .hero-stat-card:nth-child(2) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.1s; }
+    .hero-stat-card:nth-child(3) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.2s; }
+    .hero-stat-card:nth-child(4) { animation: heroCardIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) both; animation-delay: 0.3s; }
+    @keyframes heroCardIn {
+      from { opacity: 0; transform: translateY(16px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* Reduce motion for accessibility */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-delay: 0s !important;
+        transition-duration: 0.01ms !important;
+      }
     }
 
     /* ============================================
@@ -5820,15 +8271,40 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       stroke-width: 2;
       fill: none;
     }
-    .chart-bar-anomaly {
-      stroke: var(--accent-red) !important;
-      stroke-width: 2 !important;
-      stroke-dasharray: 4 2;
-    }
     .trend-avg-label {
       font-size: 9px;
       fill: var(--accent-yellow);
       font-style: italic;
+    }
+    .trend-controls {
+      display: flex;
+      gap: 6px;
+      padding: 0 1rem 0.5rem;
+    }
+    .trend-controls .chart-toggle-btn span {
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    .chart-toggle-btn {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 3px 6px;
+      cursor: pointer;
+      opacity: 0.4;
+      transition: opacity 0.2s ease, background 0.2s ease;
+      display: flex;
+      align-items: center;
+      color: var(--text-muted);
+    }
+    .chart-toggle-btn:hover {
+      opacity: 0.7;
+    }
+    .chart-toggle-btn.active {
+      opacity: 1;
+      background: var(--bg-tertiary);
+      border-color: var(--text-muted);
+      color: var(--text-secondary);
     }
 
     /* ============================================
@@ -6037,6 +8513,97 @@ function generateStyles(passRate: number, cspSafe: boolean = false): string {
       border-color: var(--accent-blue);
     }
 
+    /* ============================================
+       PDF PICKER MODAL
+    ============================================ */
+    .pdf-picker-modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 10000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .pdf-picker-modal.visible { display: flex; }
+    .pdf-picker-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 28px;
+      max-width: 540px;
+      width: 100%;
+      box-shadow: 0 16px 64px rgba(0,0,0,0.4);
+    }
+    .pdf-picker-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+    .pdf-picker-subtitle {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .pdf-picker-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .pdf-picker-option {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-decoration: none;
+      padding: 16px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-secondary);
+      transition: border-color 0.15s, box-shadow 0.15s;
+      cursor: pointer;
+    }
+    .pdf-picker-option:hover {
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 2px var(--accent-blue-dim);
+    }
+    .pdf-picker-swatches {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+    .pdf-picker-swatch {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 1px solid var(--border-subtle);
+    }
+    .pdf-picker-option-name {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+      margin-bottom: 2px;
+    }
+    .pdf-picker-option-desc {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    .pdf-picker-close {
+      display: block;
+      width: 100%;
+      padding: 8px;
+      text-align: center;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      cursor: pointer;
+      background: none;
+    }
+    .pdf-picker-close:hover { background: var(--bg-card-hover); }
+
     /* Issue #13: Inline Trace Viewer Styles */
     ${generateTraceViewerStyles(monoFont)}
 `;
@@ -6052,13 +8619,16 @@ function generateScripts(
   enableTraceViewer: boolean,
   enableHistoryDrilldown: boolean,
   historyRunSnapshotsJson: string,
-  statsData: string
+  statsData: string,
+  outputBasename: string
 ): string {
   return `    const tests = ${testsJson};
+    const pdfBasename = ${JSON.stringify(outputBasename)};
     const stats = ${statsData};
     const traceViewerEnabled = ${enableTraceViewer ? 'true' : 'false'};
     const historyDrilldownEnabled = ${enableHistoryDrilldown ? 'true' : 'false'};
     const historyRunSnapshots = ${historyRunSnapshotsJson};
+    /* @csp-split */
     const detailsBodyCache = new WeakMap();
     let currentView = 'overview';
     let selectedTestId = null;
@@ -6091,10 +8661,13 @@ function generateScripts(
         panel.style.display = 'none';
       });
 
-      // Show selected view
+      // Show selected view with fade-in
       const viewPanel = document.getElementById('view-' + view);
       if (viewPanel) {
         viewPanel.style.display = 'block';
+        viewPanel.style.animation = 'none';
+        viewPanel.offsetHeight; // force reflow
+        viewPanel.style.animation = '';
       }
 
       // Update breadcrumb
@@ -6151,7 +8724,7 @@ function generateScripts(
           viewHeader.appendChild(historyBanner);
         }
         historyBanner.innerHTML = \`
-          <span class="history-banner-icon">📅</span>
+          <span class="history-banner-icon">${icon('calendar')}</span>
           <span class="history-banner-text">Viewing run: <strong>\${label}</strong> — Each test shows this run's data. Use per-test history dots to compare.</span>
           <button class="history-banner-close" onclick="exitGlobalHistoricalView()">Back to Current Run</button>
         \`;
@@ -6338,13 +8911,13 @@ function generateScripts(
               </div>
               \${test.error ? \`
                 <div class="detail-section">
-                  <div class="detail-label"><span class="icon">⚠</span> Error</div>
+                  <div class="detail-label"><span class="icon">${icon('alert-triangle')}</span> Error</div>
                   <div class="error-box">\${escapeHtmlUnsafe(test.error)}</div>
                 </div>
               \` : ''}
               \${test.steps && test.steps.length > 0 ? \`
                 <div class="detail-section">
-                  <div class="detail-label"><span class="icon">⏱</span> Steps (\${test.steps.length})</div>
+                  <div class="detail-label"><span class="icon">${icon('clock')}</span> Steps (\${test.steps.length})</div>
                   <div class="steps-container">
                     \${test.steps.map(step => \`
                       <div class="step-row \${step.isSlowest ? 'slowest' : ''}">
@@ -6357,7 +8930,7 @@ function generateScripts(
               \` : ''}
               \${test.aiSuggestion ? \`
                 <div class="detail-section">
-                  <div class="detail-label"><span class="icon">🤖</span> AI Suggestion</div>
+                  <div class="detail-label"><span class="icon">${icon('bot')}</span> AI Suggestion</div>
                   <div class="ai-box">\${escapeHtmlUnsafe(test.aiSuggestion)}</div>
                 </div>
               \` : ''}
@@ -6390,24 +8963,7 @@ function generateScripts(
     }
 
     function filterByStatus(status) {
-      // Switch to tests view first
-      switchView('tests');
-
-      // Clear all filters and activate the matching status filter
-      document.querySelectorAll('.filter-chip').forEach(chip => {
-        chip.classList.remove('active');
-        chip.setAttribute('aria-pressed', 'false');
-      });
-
-      // Find and activate the matching status filter chip
-      const statusChip = document.querySelector('.filter-chip[data-filter="' + status + '"]');
-      if (statusChip) {
-        statusChip.classList.add('active');
-        statusChip.setAttribute('aria-pressed', 'true');
-      }
-
-      // Apply filter to test cards and list items
-      applyFilters();
+      filterTests(status);
     }
 
     /* ============================================
@@ -6580,6 +9136,7 @@ function generateScripts(
         const isFlaky = item.dataset.flaky === 'true';
         const isSlow = item.dataset.slow === 'true';
         const isNew = item.dataset.new === 'true';
+        const isQuarantined = item.dataset.quarantined === 'true';
         const isNewFailure = item.dataset.newFailure === 'true';
         const isRegression = item.dataset.regression === 'true';
         const isFixed = item.dataset.fixed === 'true';
@@ -6618,7 +9175,8 @@ function generateScripts(
           matchesHealth =
             (activeFilters.health.has('flaky') && isFlaky) ||
             (activeFilters.health.has('slow') && isSlow) ||
-            (activeFilters.health.has('new') && isNew);
+            (activeFilters.health.has('new') && isNew) ||
+            (activeFilters.health.has('quarantined') && isQuarantined);
         }
 
         // Grade group - OR logic
@@ -6646,6 +9204,7 @@ function generateScripts(
         const isFlaky = card.dataset.flaky === 'true';
         const isSlow = card.dataset.slow === 'true';
         const isNew = card.dataset.new === 'true';
+        const isQuarantined = card.dataset.quarantined === 'true';
         const isNewFailure = card.dataset.newFailure === 'true';
         const isRegression = card.dataset.regression === 'true';
         const isFixed = card.dataset.fixed === 'true';
@@ -6679,7 +9238,8 @@ function generateScripts(
           matchesHealth =
             (activeFilters.health.has('flaky') && isFlaky) ||
             (activeFilters.health.has('slow') && isSlow) ||
-            (activeFilters.health.has('new') && isNew);
+            (activeFilters.health.has('new') && isNew) ||
+            (activeFilters.health.has('quarantined') && isQuarantined);
         }
 
         if (hasGradeFilters) {
@@ -6862,6 +9422,29 @@ function generateScripts(
       }
     }
 
+    function toggleAllAvg(btn) {
+      btn.classList.toggle('active');
+      var show = btn.classList.contains('active');
+      var section = document.getElementById('trends-section');
+      if (!section) return;
+      section.querySelectorAll('.chart-layer-avg').forEach(function(el) {
+        el.style.display = show ? '' : 'none';
+      });
+    }
+
+    function toggleAllMode(btn) {
+      btn.classList.toggle('active');
+      var showBars = btn.classList.contains('active');
+      var section = document.getElementById('trends-section');
+      if (!section) return;
+      section.querySelectorAll('.chart-layer-area').forEach(function(el) {
+        el.style.display = showBars ? 'none' : '';
+      });
+      section.querySelectorAll('.chart-layer-bars').forEach(function(el) {
+        el.style.display = showBars ? '' : 'none';
+      });
+    }
+
     function toggleNetworkEntry(entryId) {
       const entry = document.querySelector('[data-entry-id="' + entryId + '"]');
       const details = document.getElementById(entryId + '-details');
@@ -6972,8 +9555,8 @@ function generateScripts(
       const toast = document.createElement('div');
       toast.className = 'toast ' + type;
 
-      const icons = { success: '✓', error: '✗', info: 'ℹ' };
-      toast.innerHTML = '<span class="toast-icon">' + (icons[type] || icons.info) + '</span><span class="toast-message">' + message + '</span>';
+      const toastIcons = { success: '${icon('check', 14)}', error: '${icon('x', 14)}', info: '${icon('info', 14)}' };
+      toast.innerHTML = '<span class="toast-icon">' + (toastIcons[type] || toastIcons.info) + '</span><span class="toast-message">' + escapeHtmlUnsafe(message) + '</span>';
 
       container.appendChild(toast);
 
@@ -6988,6 +9571,57 @@ function generateScripts(
         setTimeout(() => toast.remove(), 300);
       }, 3000);
     }
+
+    // Upgrade modal
+    function showUpgradeModal(featureName, featureDesc) {
+      var modal = document.getElementById('upgradeModal');
+      if (!modal) return;
+      document.getElementById('upgradeFeatureName').textContent = featureName;
+      document.getElementById('upgradeFeatureDesc').textContent = featureDesc;
+      modal.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+    }
+    function closeUpgradeModal() {
+      var modal = document.getElementById('upgradeModal');
+      if (!modal) return;
+      modal.style.display = 'none';
+      document.body.style.overflow = '';
+    }
+    // Close modal on overlay click or Escape
+    (function() {
+      var modal = document.getElementById('upgradeModal');
+      if (!modal) return;
+      modal.addEventListener('click', function(e) {
+        if (e.target === modal) closeUpgradeModal();
+      });
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && modal.style.display !== 'none') closeUpgradeModal();
+      });
+    })();
+
+    // Upgrade banner dismiss
+    function dismissUpgradeBanner() {
+      var banner = document.getElementById('upgradeBanner');
+      if (banner) {
+        banner.style.transition = 'opacity 0.3s, max-height 0.3s';
+        banner.style.opacity = '0';
+        banner.style.maxHeight = '0';
+        banner.style.overflow = 'hidden';
+        banner.style.marginBottom = '0';
+        banner.style.padding = '0';
+        setTimeout(function() { banner.remove(); }, 300);
+        try { sessionStorage.setItem('sw-banner-dismissed', '1'); } catch(e) {}
+      }
+    }
+    // Restore dismissed state
+    (function() {
+      try {
+        if (sessionStorage.getItem('sw-banner-dismissed') === '1') {
+          var b = document.getElementById('upgradeBanner');
+          if (b) b.remove();
+        }
+      } catch(e) {}
+    })();
 
     // Theme dropdown menu
     function toggleThemeMenu() {
@@ -7012,37 +9646,37 @@ function generateScripts(
       }
     });
 
+    const themeConfig = {
+      system:    { icon: '${icon('monitor')}', label: 'System',    attr: null },
+      light:     { icon: '${icon('sun')}', label: 'Light',     attr: 'light' },
+      dark:      { icon: '${icon('moon')}', label: 'Dark',      attr: 'dark' },
+      ocean:     { icon: '${icon('waves')}', label: 'Ocean',     attr: 'ocean' },
+      sunset:    { icon: '${icon('sunset')}', label: 'Sunset',    attr: 'sunset' },
+      dracula:   { icon: '${icon('moon')}', label: 'Dracula',   attr: 'dracula' },
+      cyberpunk: { icon: '${icon('zap')}', label: 'Cyberpunk', attr: 'cyberpunk' },
+      forest:    { icon: '${icon('tree-pine')}', label: 'Forest',    attr: 'forest' },
+      rose:      { icon: '${icon('flower-2')}', label: 'Rose',      attr: 'rose' },
+    };
+
     function setTheme(theme) {
       const root = document.documentElement;
       const icon = document.getElementById('themeIcon');
       const label = document.getElementById('themeLabel');
+      const cfg = themeConfig[theme] || themeConfig.system;
 
-      // Update active state in menu
       document.querySelectorAll('.theme-menu-item').forEach(item => {
         item.classList.toggle('active', item.dataset.theme === theme);
       });
 
-      if (theme === 'light') {
-        root.setAttribute('data-theme', 'light');
-        icon.textContent = '☀️';
-        label.textContent = 'Light';
-        localStorage.setItem('theme', 'light');
-        showToast('Light theme', 'info');
-      } else if (theme === 'dark') {
-        root.setAttribute('data-theme', 'dark');
-        icon.textContent = '🌙';
-        label.textContent = 'Dark';
-        localStorage.setItem('theme', 'dark');
-        showToast('Dark theme', 'info');
+      if (cfg.attr) {
+        root.setAttribute('data-theme', cfg.attr);
       } else {
-        // System/auto
         root.removeAttribute('data-theme');
-        icon.textContent = '💻';
-        label.textContent = 'System';
-        localStorage.setItem('theme', 'system');
-        showToast('Using system theme', 'info');
       }
-
+      if (icon) icon.innerHTML = cfg.icon;
+      if (label) label.textContent = cfg.label;
+      localStorage.setItem('theme', theme);
+      showToast(cfg.attr ? cfg.label + ' theme' : 'Using system theme', 'info');
       closeThemeMenu();
     }
 
@@ -7051,25 +9685,17 @@ function generateScripts(
       const saved = localStorage.getItem('theme') || 'system';
       const icon = document.getElementById('themeIcon');
       const label = document.getElementById('themeLabel');
+      const cfg = themeConfig[saved] || themeConfig.system;
 
-      // Update active state in menu
       document.querySelectorAll('.theme-menu-item').forEach(item => {
         item.classList.toggle('active', item.dataset.theme === saved);
       });
 
-      if (saved === 'light') {
-        document.documentElement.setAttribute('data-theme', 'light');
-        if (icon) icon.textContent = '☀️';
-        if (label) label.textContent = 'Light';
-      } else if (saved === 'dark') {
-        document.documentElement.setAttribute('data-theme', 'dark');
-        if (icon) icon.textContent = '🌙';
-        if (label) label.textContent = 'Dark';
-      } else {
-        // System - CSS handles via prefers-color-scheme
-        if (icon) icon.textContent = '💻';
-        if (label) label.textContent = 'System';
+      if (cfg.attr) {
+        document.documentElement.setAttribute('data-theme', cfg.attr);
       }
+      if (icon) icon.innerHTML = cfg.icon;
+      if (label) label.textContent = cfg.label;
     })();
 
     // Auto-scroll secondary charts to show most recent run
@@ -7119,7 +9745,7 @@ function generateScripts(
 	        }).join('');
         parts.push(
           '<div class="detail-section">' +
-            '<div class="detail-label"><span class="icon">⏱</span> Step Timings</div>' +
+            '<div class="detail-label"><span class="icon">${icon('clock')}</span> Step Timings</div>' +
             '<div class="steps-container">' + rows + '</div>' +
 	          '</div>'
 	        );
@@ -7128,7 +9754,7 @@ function generateScripts(
 	      if (snapshot.error) {
 	        parts.push(
 	          '<div class="detail-section">' +
-	            '<div class="detail-label"><span class="icon">⚠</span> Error</div>' +
+	            '<div class="detail-label"><span class="icon">${icon('alert-triangle')}</span> Error</div>' +
 	            '<div class="error-box">' + escapeHtmlUnsafe(snapshot.error) + '</div>' +
 	          '</div>'
 	        );
@@ -7138,7 +9764,7 @@ function generateScripts(
 	        const first = snapshot.attachments.screenshots[0];
 	        parts.push(
 	          '<div class="detail-section">' +
-            '<div class="detail-label"><span class="icon">📸</span> Screenshot</div>' +
+            '<div class="detail-label"><span class="icon">${icon('camera')}</span> Screenshot</div>' +
             '<div class="screenshot-box">' +
               '<img src="' + escapeHtmlUnsafe(first) + '" alt="Screenshot" onclick="window.open(this.src, \\'_blank\\')" onerror="this.style.display=\\'none\\'; this.nextElementSibling.style.display=\\'flex\\';"/>' +
               '<div class="screenshot-fallback" style="display:none;">' +
@@ -7153,9 +9779,9 @@ function generateScripts(
       if (snapshot.attachments && snapshot.attachments.videos && snapshot.attachments.videos.length > 0) {
         parts.push(
           '<div class="detail-section">' +
-            '<div class="detail-label"><span class="icon">📎</span> Attachments</div>' +
+            '<div class="detail-label"><span class="icon">${icon('paperclip')}</span> Attachments</div>' +
             '<div class="attachments">' +
-              '<a href="file://' + escapeHtmlUnsafe(snapshot.attachments.videos[0]) + '" class="attachment-link" target="_blank">🎬 Video</a>' +
+              '<a href="file://' + escapeHtmlUnsafe(snapshot.attachments.videos[0]) + '" class="attachment-link" target="_blank">${icon('film')} Video</a>' +
             '</div>' +
           '</div>'
         );
@@ -7167,7 +9793,7 @@ function generateScripts(
 	          : escapeHtmlUnsafe(snapshot.aiSuggestion);
 	        parts.push(
 	          '<div class="detail-section">' +
-	            '<div class="detail-label"><span class="icon">🤖</span> AI Suggestion</div>' +
+	            '<div class="detail-label"><span class="icon">${icon('bot')}</span> AI Suggestion</div>' +
 	            '<div class="ai-box ai-markdown">' + aiHtml + '</div>' +
 	          '</div>'
 	        );
@@ -7325,7 +9951,7 @@ function generateScripts(
 	    }
 
     // Run on page load
-    window.addEventListener('DOMContentLoaded', () => {
+    function onReady() {
       scrollChartsToRight();
       initHistoryDrilldown();
       if (!traceViewerEnabled) {
@@ -7333,7 +9959,76 @@ function generateScripts(
           el.style.display = 'none';
         });
       }
-    });
+      initDesignEnhancements();
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', onReady);
+    } else {
+      onReady();
+    }
+
+    /* ============================================
+       DESIGN ENHANCEMENTS (JS)
+    ============================================ */
+    function initDesignEnhancements() {
+      animateCounters();
+      animateProgressRings();
+      setStatusAccent();
+      // Apply staggered entrance once — class is never re-added so tab switches don't replay
+      document.querySelectorAll('.test-list-item').forEach(function(el) {
+        el.classList.add('animate-entrance');
+      });
+    }
+
+    // 1. Animated counters — hero stat values count up
+    function animateCounters() {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      document.querySelectorAll('.hero-stat-value').forEach(function(el) {
+        var text = el.textContent || '';
+        // Match numbers like "95.2%" or "1.3s" or "28"
+        var match = text.match(/^([\\d.]+)(.*)/);
+        if (!match) return;
+        var target = parseFloat(match[1]);
+        var suffix = match[2];
+        if (isNaN(target) || target === 0) return;
+        var isFloat = match[1].includes('.');
+        var decimals = isFloat ? (match[1].split('.')[1] || '').length : 0;
+        var startTime = null;
+        var duration = 800;
+        el.textContent = '0' + suffix;
+        requestAnimationFrame(function step(ts) {
+          if (!startTime) startTime = ts;
+          var progress = Math.min((ts - startTime) / duration, 1);
+          // Ease out cubic
+          var eased = 1 - Math.pow(1 - progress, 3);
+          var current = eased * target;
+          el.textContent = (isFloat ? current.toFixed(decimals) : Math.round(current)) + suffix;
+          if (progress < 1) requestAnimationFrame(step);
+        });
+      });
+    }
+
+    // 6. Progress ring animation on load
+    function animateProgressRings() {
+      document.querySelectorAll('.progress-ring-fill, .health-ring-fill').forEach(function(el) {
+        el.classList.add('animate');
+      });
+    }
+
+    // 8. Status-aware header accent
+    function setStatusAccent() {
+      var topBar = document.querySelector('.top-bar');
+      if (!topBar) return;
+      var failedCount = document.querySelectorAll('#view-tests .status-dot.failed').length;
+      var flakyCount = document.querySelectorAll('#view-tests .test-item-badge.flaky').length;
+      if (failedCount > 0) {
+        topBar.classList.add('status-has-failures');
+      } else if (flakyCount > 0) {
+        topBar.classList.add('status-has-flaky');
+      } else {
+        topBar.classList.add('status-all-pass');
+      }
+    }
 
 ${includeGallery ? `    // Gallery functions\n${generateGalleryScript()}` : ''}
 
@@ -7513,6 +10208,65 @@ ${includeComparison ? `    // Comparison functions\n${generateComparisonScript()
         }
       });
     })();
+
+    /* ============================================
+       PDF PICKER MODAL
+    ============================================ */
+    function showPdfPicker() {
+      let modal = document.getElementById('pdf-picker-modal');
+      if (modal) {
+        modal.classList.add('visible');
+        closeExportMenu();
+        return;
+      }
+
+      modal = document.createElement('div');
+      modal.id = 'pdf-picker-modal';
+      modal.className = 'pdf-picker-modal visible';
+      modal.innerHTML =
+        '<div class="pdf-picker-card">' +
+          '<div class="pdf-picker-title">Download PDF Report</div>' +
+          '<div class="pdf-picker-subtitle">Choose a style for your executive summary</div>' +
+          '<div class="pdf-picker-grid">' +
+            '<a class="pdf-picker-option" href="' + pdfBasename + '.pdf" download>' +
+              '<div class="pdf-picker-swatches">' +
+                '<div class="pdf-picker-swatch" style="background:#2563eb"></div>' +
+                '<div class="pdf-picker-swatch" style="background:#0f172a"></div>' +
+                '<div class="pdf-picker-swatch" style="background:#f8fafc"></div>' +
+              '</div>' +
+              '<div class="pdf-picker-option-name">Corporate</div>' +
+              '<div class="pdf-picker-option-desc">Blue accent, white background</div>' +
+            '</a>' +
+            '<a class="pdf-picker-option" href="' + pdfBasename + '-dark.pdf" download>' +
+              '<div class="pdf-picker-swatches">' +
+                '<div class="pdf-picker-swatch" style="background:#6366f1"></div>' +
+                '<div class="pdf-picker-swatch" style="background:#0f172a"></div>' +
+                '<div class="pdf-picker-swatch" style="background:#1e293b"></div>' +
+              '</div>' +
+              '<div class="pdf-picker-option-name">Dark</div>' +
+              '<div class="pdf-picker-option-desc">Indigo accent, navy background</div>' +
+            '</a>' +
+            '<a class="pdf-picker-option" href="' + pdfBasename + '-minimal.pdf" download>' +
+              '<div class="pdf-picker-swatches">' +
+                '<div class="pdf-picker-swatch" style="background:#374151"></div>' +
+                '<div class="pdf-picker-swatch" style="background:#6b7280"></div>' +
+                '<div class="pdf-picker-swatch" style="background:#f9fafb"></div>' +
+              '</div>' +
+              '<div class="pdf-picker-option-name">Minimal</div>' +
+              '<div class="pdf-picker-option-desc">Grayscale, printer-friendly</div>' +
+            '</a>' +
+          '</div>' +
+          '<button class="pdf-picker-close" onclick="closePdfPicker()">Close</button>' +
+        '</div>';
+      modal.addEventListener('click', function(e) { if (e.target === modal) closePdfPicker(); });
+      document.body.appendChild(modal);
+      closeExportMenu();
+    }
+
+    function closePdfPicker() {
+      const modal = document.getElementById('pdf-picker-modal');
+      if (modal) modal.classList.remove('visible');
+    }
 
     /* ============================================
        EXPORTABLE SUMMARY CARD

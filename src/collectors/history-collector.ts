@@ -9,8 +9,8 @@ import { sanitizeFilename } from '../utils/sanitizers';
  */
 export class HistoryCollector {
   private history: TestHistory = { runs: [], tests: {}, summaries: [] };
-  private options: Required<Omit<SmartReporterOptions, 'slackWebhook' | 'teamsWebhook' | 'baselineRunId' | 'networkLogFilter' | 'apiKey' | 'projectId' | 'cloudEndpoint' | 'projectName' | 'thresholds' | 'maxEmbeddedSize' | 'runId'>> &
-                   Pick<SmartReporterOptions, 'slackWebhook' | 'teamsWebhook' | 'baselineRunId' | 'networkLogFilter' | 'apiKey' | 'projectId' | 'cloudEndpoint' | 'projectName' | 'thresholds' | 'maxEmbeddedSize' | 'runId'>;
+  private options: Required<Omit<SmartReporterOptions, 'slackWebhook' | 'teamsWebhook' | 'baselineRunId' | 'networkLogFilter' | 'apiKey' | 'projectId' | 'cloudEndpoint' | 'projectName' | 'thresholds' | 'maxEmbeddedSize' | 'runId' | 'licenseKey' | 'exportJson' | 'exportPdf' | 'exportJunit' | 'exportPdfFull' | 'theme' | 'notifications' | 'branding' | 'qualityGates' | 'quarantine' | 'live' | 'aiProvider' | 'ollamaBaseUrl' | 'ollamaModel' | 'copilotModel'>> &
+                   Pick<SmartReporterOptions, 'slackWebhook' | 'teamsWebhook' | 'baselineRunId' | 'networkLogFilter' | 'apiKey' | 'projectId' | 'cloudEndpoint' | 'projectName' | 'thresholds' | 'maxEmbeddedSize' | 'runId' | 'licenseKey' | 'exportJson' | 'exportPdf' | 'exportJunit' | 'exportPdfFull' | 'theme' | 'notifications' | 'branding' | 'qualityGates' | 'quarantine' | 'live' | 'aiProvider' | 'ollamaBaseUrl' | 'ollamaModel' | 'copilotModel'>;
   private outputDir: string;
   private currentRun: RunMetadata;
   private startTime: number;
@@ -41,6 +41,7 @@ export class HistoryCollector {
       enableGalleryView: options.enableGalleryView ?? true,
       enableComparison: options.enableComparison ?? true,
       enableAIRecommendations: options.enableAIRecommendations ?? true,
+      enableAISuiteHealth: options.enableAISuiteHealth ?? true,
       enableTrendsView: options.enableTrendsView ?? true,
       enableTraceViewer: options.enableTraceViewer ?? true,
       enableHistoryDrilldown: options.enableHistoryDrilldown ?? false,
@@ -68,6 +69,18 @@ export class HistoryCollector {
       relativeToCwd: options.relativeToCwd ?? false,
       // Issue #26: External run ID (sanitized for safe use in filenames and HTML)
       runId: options.runId ? sanitizeFilename(options.runId.trim(), 100) : undefined,
+      // Premium options (pass through for reference)
+      licenseKey: options.licenseKey,
+      exportJson: options.exportJson,
+      exportPdf: options.exportPdf,
+      exportJunit: options.exportJunit,
+      theme: options.theme,
+      notifications: options.notifications,
+      branding: options.branding,
+      qualityGates: options.qualityGates,
+      quarantine: options.quarantine,
+      live: options.live,
+      exportPdfFull: options.exportPdfFull,
     };
     this.outputDir = outputDir;
     this.currentRun = {
@@ -124,7 +137,7 @@ export class HistoryCollector {
       }
 
       this.history.tests[result.testId].push({
-        passed: result.status === 'passed',
+        passed: result.status === 'passed' || result.outcome === 'expected' || result.outcome === 'flaky',
         duration: result.duration,
         timestamp,
         ...(this.options.enableHistoryDrilldown ? { runId } : {}),
@@ -141,10 +154,17 @@ export class HistoryCollector {
     }
 
     // Add run summary
-    const passed = results.filter(r => r.status === 'passed').length;
-    const failed = results.filter(r => r.status === 'failed' || r.status === 'timedOut').length;
+    const passed = results.filter(r =>
+      r.status === 'passed' ||
+      r.outcome === 'expected' ||
+      r.outcome === 'flaky'
+    ).length;
+    const failed = results.filter(r =>
+      (r.status === 'failed' || r.status === 'timedOut') &&
+      r.outcome !== 'expected' && r.outcome !== 'flaky'
+    ).length;
     const skipped = results.filter(r => r.status === 'skipped').length;
-    const flaky = results.filter(r => r.flakinessScore && r.flakinessScore >= 0.3).length;
+    const flaky = results.filter(r => r.outcome === 'flaky').length;
     const slow = results.filter(r => r.performanceTrend?.startsWith('↑')).length;
     const total = results.length;
     const duration = Date.now() - this.startTime;

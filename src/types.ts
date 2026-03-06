@@ -1,6 +1,57 @@
 import type { TestCase, TestResult } from '@playwright/test/reporter';
 
 // ============================================================================
+// Licensing
+// ============================================================================
+
+export type LicenseTier = 'community' | 'starter' | 'pro' | 'team';
+
+export interface LicenseInfo {
+  tier: LicenseTier;
+  valid: boolean;
+  org?: string;
+  expiry?: string;
+  error?: string;
+}
+
+// ============================================================================
+// Premium Configuration
+// ============================================================================
+
+export interface ThemeConfig {
+  preset?: 'default' | 'dark' | 'light' | 'high-contrast' | 'ocean' | 'sunset' | 'dracula' | 'cyberpunk' | 'forest' | 'rose';
+  primary?: string;
+  background?: string;
+  surface?: string;
+  text?: string;
+  accent?: string;
+  success?: string;
+  error?: string;
+  warning?: string;
+}
+
+export interface BrandingConfig {
+  logo?: string;
+  title?: string;
+  footer?: string;
+  hidePoweredBy?: boolean;
+}
+
+export interface NotificationCondition {
+  minFailures?: number;
+  maxPassRate?: number;
+  tags?: string[];
+  stabilityGradeDrop?: boolean;
+}
+
+export interface NotificationConfig {
+  channel: 'slack' | 'teams' | 'pagerduty' | 'email' | 'webhook';
+  config: Record<string, string>;
+  conditions?: NotificationCondition;
+  template?: string;
+}
+
+// ============================================================================
 // Configuration
 // ============================================================================
 
@@ -41,6 +92,7 @@ export interface SmartReporterOptions {
   enableGalleryView?: boolean;
   enableComparison?: boolean;
   enableAIRecommendations?: boolean;
+  enableAISuiteHealth?: boolean;   // Default: true (AI health summary in Overview tab, uses AI quota)
   enableTrendsView?: boolean;
   enableTraceViewer?: boolean; // Enable "View trace" links
   enableHistoryDrilldown?: boolean; // Default: false (stores per-run snapshots for dot-click drilldown)
@@ -102,6 +154,35 @@ export interface SmartReporterOptions {
   // GitHub Copilot options (uses GitHub Models API)
   // Requires GITHUB_TOKEN env var (from `gh auth token` or PAT with copilot scope)
   copilotModel?: string;           // Default: 'claude-sonnet-4-20250514'
+
+  // Premium: License key (also from SMART_REPORTER_LICENSE_KEY env var)
+  licenseKey?: string;
+
+  // Premium: Export options (Starter tier)
+  exportJson?: boolean;            // Write smart-report-data.json alongside HTML
+  exportPdf?: boolean;             // Generate PDF executive summary
+  exportJunit?: boolean;           // Generate JUnit XML output
+
+  // Premium: Custom themes (Starter tier)
+  theme?: ThemeConfig;
+
+  // Premium: Advanced notifications (Starter tier)
+  notifications?: NotificationConfig[];
+
+  // Premium: Report branding (Starter tier)
+  branding?: BrandingConfig;
+
+  // Premium: Quality gates (Starter tier) - CI pipeline pass/fail rules
+  qualityGates?: QualityGateConfig;
+
+  // Premium: Flakiness quarantine (Starter tier) - auto-quarantine flaky tests
+  quarantine?: QuarantineConfig;
+
+  // Live reporting: stream results during execution
+  live?: LiveConfig;
+
+  // Premium: Full PDF report (legacy HTML-to-PDF, replaces default executive PDF)
+  exportPdfFull?: boolean;
 }
 
 // ============================================================================
@@ -349,8 +430,8 @@ export interface NetworkLogEntry {
   };
   requestHeaders?: Record<string, string>;
   responseHeaders?: Record<string, string>;
-  requestBody?: any;
-  responseBody?: any;
+  requestBody?: unknown;
+  responseBody?: unknown;
 }
 
 export interface NetworkLogData {
@@ -379,4 +460,115 @@ export interface SuiteStats {
   needsRetry: number;
   passRate: number;
   averageStability: number;
+}
+
+// ============================================================================
+// Quality Gates (Starter+)
+// ============================================================================
+
+export interface QualityGateConfig {
+  maxFailures?: number;
+  minPassRate?: number;
+  maxFlakyRate?: number;
+  minStabilityGrade?: 'A' | 'B' | 'C' | 'D';
+  noNewFailures?: boolean;
+}
+
+export interface QualityGateRuleResult {
+  rule: string;
+  passed: boolean;
+  actual: string;
+  threshold: string;
+  skipped?: boolean;
+}
+
+export interface QualityGateResult {
+  passed: boolean;
+  rules: QualityGateRuleResult[];
+}
+
+// ============================================================================
+// Quarantine (Starter+)
+// ============================================================================
+
+export interface QuarantineConfig {
+  enabled: boolean;
+  threshold?: number;
+  maxQuarantined?: number;
+  outputFile?: string;
+}
+
+export interface QuarantineEntry {
+  testId: string;
+  title: string;
+  file: string;
+  flakinessScore: number;
+  quarantinedAt: string;
+}
+
+export interface QuarantineFile {
+  generatedAt: string;
+  threshold: number;
+  entries: QuarantineEntry[];
+}
+
+// ============================================================================
+// Live Reporting
+// ============================================================================
+
+export interface LiveConfig {
+  enabled: boolean;
+  outputFile?: string;        // Default: .smart-live-results.jsonl
+  dashboard?: boolean;        // Generate smart-live.html alongside report (default: true)
+  notifyOnFirstFailure?: boolean; // Starter tier: send Slack/Teams on first failure
+}
+
+export interface LiveEvent {
+  event: 'start' | 'test' | 'complete';
+  timestamp: string;
+}
+
+export interface LiveStartEvent extends LiveEvent {
+  event: 'start';
+  totalExpected: number;
+  ciInfo?: CIInfo;
+}
+
+export interface LiveTestEvent extends LiveEvent {
+  event: 'test';
+  testId: string;
+  title: string;
+  file: string;
+  status: 'passed' | 'failed' | 'skipped' | 'timedOut' | 'interrupted';
+  duration: number;
+  error?: string;
+  retry: number;
+  counters: LiveCounters;
+}
+
+export interface LiveCompleteEvent extends LiveEvent {
+  event: 'complete';
+  duration: number;
+  counters: LiveCounters;
+}
+
+export interface LiveCounters {
+  passed: number;
+  failed: number;
+  skipped: number;
+  flaky: number;
+  completed: number;
+  totalExpected: number;
+}
+
+// ============================================================================
+// AI Health Digest
+// ============================================================================
+
+export interface DigestOptions {
+  period: 'daily' | 'weekly' | 'monthly';
+  historyFile: string;
+  output?: string;
+  ai?: boolean;
+  format?: 'markdown' | 'text';
 }

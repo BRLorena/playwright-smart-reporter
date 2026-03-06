@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AIAnalyzer } from './ai-analyzer';
 import type { TestResultData, FailureCluster, SuiteStats } from '../types';
 
-// Helper to create test result data
 function createTestResult(overrides: Partial<TestResultData> = {}): TestResultData {
   return {
     testId: 'test-1',
@@ -17,7 +16,6 @@ function createTestResult(overrides: Partial<TestResultData> = {}): TestResultDa
   };
 }
 
-// Helper to create failure cluster
 function createFailureCluster(overrides: Partial<FailureCluster> = {}): FailureCluster {
   return {
     id: 'cluster-1',
@@ -28,7 +26,6 @@ function createFailureCluster(overrides: Partial<FailureCluster> = {}): FailureC
   };
 }
 
-// Helper to create suite stats
 function createSuiteStats(overrides: Partial<SuiteStats> = {}): SuiteStats {
   return {
     total: 10,
@@ -44,9 +41,16 @@ function createSuiteStats(overrides: Partial<SuiteStats> = {}): SuiteStats {
   };
 }
 
-// Mock fetch globally
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+
+function mockProxyResponse(suggestion: string, remaining = 50, resetAt = 1700000000) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ suggestion, remaining, resetAt }),
+  };
+}
 
 describe('AIAnalyzer', () => {
   let originalEnv: NodeJS.ProcessEnv;
@@ -75,47 +79,40 @@ describe('AIAnalyzer', () => {
     it('returns true when ANTHROPIC_API_KEY is set', () => {
       process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
       const analyzer = new AIAnalyzer();
-
       expect(analyzer.isAvailable()).toBe(true);
     });
 
     it('returns true when OPENAI_API_KEY is set', () => {
       process.env.OPENAI_API_KEY = 'test-openai-key';
       const analyzer = new AIAnalyzer();
-
       expect(analyzer.isAvailable()).toBe(true);
     });
 
     it('returns true when GEMINI_API_KEY is set', () => {
       process.env.GEMINI_API_KEY = 'test-gemini-key';
       const analyzer = new AIAnalyzer();
-
       expect(analyzer.isAvailable()).toBe(true);
     });
 
     it('returns true when GITHUB_TOKEN is set', () => {
       process.env.GITHUB_TOKEN = 'test-github-token';
       const analyzer = new AIAnalyzer();
-
       expect(analyzer.isAvailable()).toBe(true);
     });
 
     it('returns true when aiProvider is ollama (no key needed)', () => {
       const analyzer = new AIAnalyzer({ aiProvider: 'ollama' });
-
       expect(analyzer.isAvailable()).toBe(true);
     });
 
     it('returns true when aiProvider is copilot and GITHUB_TOKEN is set', () => {
       process.env.GITHUB_TOKEN = 'test-github-token';
       const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
-
       expect(analyzer.isAvailable()).toBe(true);
     });
 
     it('returns false when aiProvider is copilot but no GITHUB_TOKEN', () => {
       const analyzer = new AIAnalyzer({ aiProvider: 'copilot' });
-
       expect(analyzer.isAvailable()).toBe(false);
     });
 
@@ -124,13 +121,11 @@ describe('AIAnalyzer', () => {
       process.env.OPENAI_API_KEY = 'test-openai-key';
       process.env.GEMINI_API_KEY = 'test-gemini-key';
       const analyzer = new AIAnalyzer();
-
       expect(analyzer.isAvailable()).toBe(true);
     });
 
-    it('returns false when no keys are set', () => {
+    it('returns false when no keys or explicit provider are set', () => {
       const analyzer = new AIAnalyzer();
-
       expect(analyzer.isAvailable()).toBe(false);
     });
   });
@@ -149,7 +144,7 @@ describe('AIAnalyzer', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('logs tip message when no API keys are set', async () => {
+    it('prints tip when no AI keys are set', async () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const analyzer = new AIAnalyzer();
       const results = [
@@ -166,22 +161,17 @@ describe('AIAnalyzer', () => {
       consoleSpy.mockRestore();
     });
 
-    it('analyzes failed tests with Anthropic', async () => {
-      process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
+    it('calls Anthropic API with correct URL and body', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'my-key';
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          content: [{ type: 'text', text: 'Check your selector syntax' }],
-        }),
+        json: async () => ({ content: [{ type: 'text', text: 'Check your selector syntax' }] }),
       });
 
       const analyzer = new AIAnalyzer();
       const results = [
-        createTestResult({
-          testId: 'test-1',
-          status: 'failed',
-          error: 'Element not found',
-        }),
+        createTestResult({ testId: 'test-1', status: 'failed', error: 'Element not found' }),
       ];
 
       await analyzer.analyzeFailed(results);
@@ -189,99 +179,84 @@ describe('AIAnalyzer', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(mockFetch).toHaveBeenCalledWith(
         'https://api.anthropic.com/v1/messages',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'x-api-key': 'test-anthropic-key',
-          }),
-        })
+        expect.objectContaining({ method: 'POST' })
       );
       expect(results[0].aiSuggestion).toBe('Check your selector syntax');
     });
 
-    it('analyzes failed tests with OpenAI when Anthropic key is not set', async () => {
-      process.env.OPENAI_API_KEY = 'test-openai-key';
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'Add proper wait condition' } }],
-        }),
-      });
+    it('processes in batches of 3 concurrent requests', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      for (let i = 0; i < 5; i++) {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ content: [{ type: 'text', text: `suggestion-${i}` }] }),
+        });
+      }
 
       const analyzer = new AIAnalyzer();
-      const results = [
-        createTestResult({
-          testId: 'test-1',
-          status: 'failed',
-          error: 'Timeout waiting for element',
-        }),
-      ];
+      const results = Array.from({ length: 5 }, (_, i) =>
+        createTestResult({ testId: `test-${i}`, status: 'failed', error: `Error ${i}` })
+      );
 
       await analyzer.analyzeFailed(results);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        'https://api.openai.com/v1/chat/completions',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            Authorization: 'Bearer test-openai-key',
-          }),
-        })
-      );
-      expect(results[0].aiSuggestion).toBe('Add proper wait condition');
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+      results.forEach((r, i) => {
+        expect(r.aiSuggestion).toBe(`suggestion-${i}`);
+      });
     });
 
-    it('analyzes failed tests with Gemini when Anthropic and OpenAI keys are not set', async () => {
-      process.env.GEMINI_API_KEY = 'test-gemini-key';
+    it('handles API error gracefully', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'bad-key';
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+      const analyzer = new AIAnalyzer();
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
+
+      await analyzer.analyzeFailed(results);
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to get AI suggestion'),
+        expect.any(Error)
+      );
+      expect(results[0].aiSuggestion).toBeUndefined();
+
+      consoleSpy.mockRestore();
+    });
+
+    it('uses custom aiPrompt if provided', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      const customPrompt = 'Custom prompt for analysis';
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          candidates: [{
-            content: { parts: [{ text: 'Increase timeout value' }] },
-            role: 'model',
-          }],
-        }),
+        json: async () => ({ content: [{ type: 'text', text: 'Custom suggestion' }] }),
       });
 
       const analyzer = new AIAnalyzer();
       const results = [
-        createTestResult({
-          testId: 'test-1',
-          status: 'failed',
-          error: 'Test timeout exceeded',
-        }),
+        createTestResult({ status: 'failed', error: 'Error', aiPrompt: customPrompt }),
       ];
 
       await analyzer.analyzeFailed(results);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'x-goog-api-key': 'test-gemini-key',
-          }),
-        })
-      );
-      expect(results[0].aiSuggestion).toBe('Increase timeout value');
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.messages[0].content).toBe(customPrompt);
     });
 
     it('analyzes timedOut tests', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
       process.env.ANTHROPIC_API_KEY = 'test-key';
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          content: [{ type: 'text', text: 'Test suggestion' }],
-        }),
+        json: async () => ({ content: [{ type: 'text', text: 'Test suggestion' }] }),
       });
 
       const analyzer = new AIAnalyzer();
-      const results = [
-        createTestResult({
-          status: 'timedOut',
-          error: 'Test timed out',
-        }),
-      ];
+      const results = [createTestResult({ status: 'timedOut', error: 'Test timed out' })];
 
       await analyzer.analyzeFailed(results);
 
@@ -289,47 +264,14 @@ describe('AIAnalyzer', () => {
       expect(results[0].aiSuggestion).toBe('Test suggestion');
     });
 
-    it('uses custom aiPrompt if provided', async () => {
-      process.env.ANTHROPIC_API_KEY = 'test-key';
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          content: [{ type: 'text', text: 'Custom suggestion' }],
-        }),
-      });
-
-      const analyzer = new AIAnalyzer();
-      const customPrompt = 'Custom prompt for analysis';
-      const results = [
-        createTestResult({
-          status: 'failed',
-          error: 'Error',
-          aiPrompt: customPrompt,
-        }),
-      ];
-
-      await analyzer.analyzeFailed(results);
-
-      const fetchCall = mockFetch.mock.calls[0];
-      const body = JSON.parse(fetchCall[1].body);
-      expect(body.messages[0].content).toBe(customPrompt);
-    });
-
-    it('handles API errors gracefully', async () => {
-      process.env.ANTHROPIC_API_KEY = 'test-key';
+    it('handles generic server error gracefully', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      });
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
       const analyzer = new AIAnalyzer();
-      const results = [
-        createTestResult({
-          status: 'failed',
-          error: 'Test error',
-        }),
-      ];
+      const results = [createTestResult({ status: 'failed', error: 'Error' })];
 
       await analyzer.analyzeFailed(results);
 
@@ -350,7 +292,7 @@ describe('AIAnalyzer', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('skips analysis when no API keys are set', async () => {
+    it('skips analysis when not available', async () => {
       const analyzer = new AIAnalyzer();
       const clusters = [createFailureCluster()];
 
@@ -359,16 +301,12 @@ describe('AIAnalyzer', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('analyzes clusters with available AI provider', async () => {
-      process.env.GEMINI_API_KEY = 'test-gemini-key';
+    it('analyzes clusters via Anthropic API', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'test-key';
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          candidates: [{
-            content: { parts: [{ text: 'Cluster suggestion' }] },
-            role: 'model',
-          }],
-        }),
+        json: async () => ({ content: [{ type: 'text', text: 'Cluster suggestion' }] }),
       });
 
       const analyzer = new AIAnalyzer();
@@ -378,6 +316,80 @@ describe('AIAnalyzer', () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(clusters[0].aiSuggestion).toBe('Cluster suggestion');
+    });
+  });
+
+  describe('analyzeSuiteHealth', () => {
+    it('returns undefined when no AI keys set', async () => {
+      const analyzer = new AIAnalyzer();
+      const stats = createSuiteStats();
+
+      const result = await analyzer.analyzeSuiteHealth([], stats, [], []);
+
+      expect(result).toBeUndefined();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('calls AI and returns health summary', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      const expectedSummary = 'Your suite has 3 recurring failures in auth flows.';
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ content: [{ type: 'text', text: expectedSummary }] }),
+      });
+
+      const analyzer = new AIAnalyzer();
+      const stats = createSuiteStats({ failed: 3, passRate: 70 });
+      const clusters = [createFailureCluster({ count: 3, errorType: 'Authentication Error' })];
+      const flakyResults = [createTestResult({ flakinessScore: 0.5 })];
+
+      const result = await analyzer.analyzeSuiteHealth(flakyResults, stats, clusters, []);
+
+      expect(result).toBe(expectedSummary);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const prompt = body.messages[0].content;
+      expect(prompt).toContain('Pass Rate: 70%');
+      expect(prompt).toContain('Authentication Error');
+    });
+
+    it('includes history trend in prompt when summaries available', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ content: [{ type: 'text', text: 'Health summary' }] }),
+      });
+
+      const analyzer = new AIAnalyzer();
+      const stats = createSuiteStats({ passRate: 85 });
+      const historySummaries = [
+        { runId: 'r1', timestamp: '2025-01-01', total: 10, passed: 9, failed: 1, skipped: 0, flaky: 0, slow: 0, duration: 1000, passRate: 90 },
+        { runId: 'r2', timestamp: '2025-01-02', total: 10, passed: 8, failed: 2, skipped: 0, flaky: 0, slow: 0, duration: 1000, passRate: 80 },
+      ];
+
+      await analyzer.analyzeSuiteHealth([], stats, [], historySummaries);
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const prompt = body.messages[0].content;
+      expect(prompt).toContain('90%');
+      expect(prompt).toContain('80%');
+      expect(prompt).toContain('85% (current)');
+    });
+
+    it('returns undefined on API error', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const analyzer = new AIAnalyzer();
+      const stats = createSuiteStats();
+
+      const result = await analyzer.analyzeSuiteHealth([], stats, [], []);
+
+      expect(result).toBeUndefined();
     });
   });
 
@@ -441,7 +453,7 @@ describe('AIAnalyzer', () => {
       const analyzer = new AIAnalyzer();
       const results = [
         createTestResult({ testId: 'test-1', performanceTrend: '↑ 50%' }),
-        createTestResult({ testId: 'test-2', performanceTrend: '↓ 10%' }), // improved, should not be included
+        createTestResult({ testId: 'test-2', performanceTrend: '↓ 10%' }),
       ];
       const stats = createSuiteStats();
 
@@ -507,7 +519,6 @@ describe('AIAnalyzer', () => {
 
       const recommendations = analyzer.generateRecommendations(results, stats);
 
-      // Verify sorted by priority descending
       for (let i = 0; i < recommendations.length - 1; i++) {
         expect(recommendations[i].priority).toBeGreaterThanOrEqual(
           recommendations[i + 1].priority

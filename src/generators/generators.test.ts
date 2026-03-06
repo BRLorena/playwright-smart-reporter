@@ -54,7 +54,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(typeof html).toBe('string');
       expect(html).toContain('<!DOCTYPE html>');
@@ -69,7 +69,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).toContain('Test One');
       expect(html).toContain('passed');
@@ -87,7 +87,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).toContain('passed');
       expect(html).toContain('failed');
@@ -113,7 +113,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).toContain('Test One');
     });
@@ -131,7 +131,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).toContain('Flaky');
     });
@@ -149,7 +149,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).toContain('data:image/png;base64,abc123');
     });
@@ -175,7 +175,7 @@ describe('html-generator', () => {
         comparison,
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).toContain('Test One');
     });
@@ -192,7 +192,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).not.toContain('<script>alert("xss")</script>');
       expect(html).toContain('&lt;script&gt;');
@@ -221,7 +221,7 @@ describe('html-generator', () => {
         options: {},
       };
 
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       // The HTML should be generated successfully
       expect(html).toContain('<!DOCTYPE html>');
@@ -263,7 +263,7 @@ describe('html-generator', () => {
       };
 
       // Should not throw RangeError
-      const html = generateHtml(data);
+      const { html } = generateHtml(data);
 
       expect(html).toContain('<!DOCTYPE html>');
       expect(html).toContain('Test 0');
@@ -278,6 +278,325 @@ describe('html-generator', () => {
       expect(testsJson).not.toContain('BBBBBBBBBBBBBBBBB');
       // Should use placeholder instead
       expect(testsJson).toContain('[base64-screenshot]');
+    });
+
+    it('renders AI suite health summary when provided', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'pro',
+        aiSuiteHealthSummary: 'Your suite is healthy with a 90% pass rate.',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('AI Health Summary');
+      expect(html).toContain('Your suite is healthy with a 90% pass rate.');
+      expect(html).toContain('ai-health-card');
+      expect(html).toContain('>Starter</span>');
+    });
+
+    it('renders AI suite health summary for starter tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'starter',
+        aiSuiteHealthSummary: 'Suite looks good.',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('AI Health Summary');
+      expect(html).toContain('Suite looks good.');
+      expect(html).toContain('>Starter</span>');
+    });
+
+    it('shows placeholder for community tier without AI summary', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('ai-health-card pro-feature-placeholder');
+      expect(html).toContain('AI-powered executive summary');
+    });
+
+    it('does not render AI health section for pro tier without summary', () => {
+      const data: HtmlGeneratorData = {
+        results: [createMinimalTestResult()],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'pro',
+      };
+
+      const { html } = generateHtml(data);
+
+      // CSS will have the class names, but the overview content should not have the card
+      expect(html).not.toContain('AI Health Summary</span>');
+      expect(html).not.toContain('AI-powered executive summary');
+    });
+  });
+});
+
+describe('CSP-safe mode', () => {
+  it('returns GeneratedReport with css and js fields when cspSafe is true', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult()],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: { cspSafe: true },
+      outputBasename: 'test-report',
+    };
+
+    const report = generateHtml(data);
+
+    expect(report.html).toContain('<!DOCTYPE html>');
+    expect(report.css).toBeDefined();
+    expect(typeof report.css).toBe('string');
+    expect(report.css!.length).toBeGreaterThan(0);
+    expect(report.js).toBeDefined();
+    expect(typeof report.js).toBe('string');
+    expect(report.js!.length).toBeGreaterThan(0);
+  });
+
+  it('CSP-safe HTML uses external stylesheet link instead of inline style', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult()],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: { cspSafe: true, enableTraceViewer: false },
+      outputBasename: 'test-report',
+    };
+
+    const { html } = generateHtml(data);
+
+    expect(html).toContain('<link rel="stylesheet" href="test-report.css">');
+    expect(html).not.toMatch(/<style>[^<]/);
+  });
+
+  it('CSP-safe HTML uses external script src instead of inline script', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult()],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: { cspSafe: true },
+      outputBasename: 'test-report',
+    };
+
+    const { html } = generateHtml(data);
+
+    expect(html).toContain('<script src="test-report.js" defer></script>');
+    expect(html).toContain('<script type="application/json" id="report-data-tests">');
+    expect(html).toContain('<script type="application/json" id="report-data-stats">');
+  });
+
+  it('CSP-safe JS reads data from DOM JSON tags and does not contain inline data', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult()],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: { cspSafe: true },
+      outputBasename: 'test-report',
+    };
+
+    const report = generateHtml(data);
+
+    expect(report.js).toContain("document.getElementById('report-data-tests')");
+    expect(report.js).toContain("document.getElementById('report-data-stats')");
+    // Verify inline data declarations were stripped (not just prepended)
+    expect(report.js).not.toMatch(/const tests = \[/);
+  });
+
+  it('non-CSP mode returns undefined css and js', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult()],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: {},
+    };
+
+    const report = generateHtml(data);
+
+    expect(report.html).toContain('<!DOCTYPE html>');
+    expect(report.css).toBeUndefined();
+    expect(report.js).toBeUndefined();
+  });
+
+  it('CSP-safe mode strips base64 data from embedded JSON', () => {
+    const largeBase64 = 'data:image/png;base64,' + 'A'.repeat(50000);
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult({ screenshot: largeBase64 })],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: { cspSafe: true },
+      outputBasename: 'test-report',
+    };
+
+    const report = generateHtml(data);
+
+    // Extract the JSON script tag content — should use placeholder, not large base64
+    const jsonMatch = report.html.match(/<script type="application\/json" id="report-data-tests">([\s\S]*?)<\/script>/);
+    expect(jsonMatch).toBeTruthy();
+    expect(jsonMatch![1]).toContain('[base64-screenshot]');
+    expect(jsonMatch![1]).not.toContain('AAAAAAAAAAAAAAAAA');
+  });
+
+  it('non-CSP mode has inline style and script tags', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult()],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: {},
+    };
+
+    const { html } = generateHtml(data);
+
+    expect(html).toContain('<style>');
+    expect(html).not.toContain('<link rel="stylesheet"');
+  });
+});
+
+describe('flaky filter', () => {
+  it('marks test as flaky when outcome is flaky even without high flakinessScore', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult({ outcome: 'flaky', flakinessScore: 0.1 })],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: {},
+    };
+
+    const { html } = generateHtml(data);
+
+    expect(html).toContain('data-flaky="true"');
+  });
+
+  it('marks test as flaky when flakinessScore is high even without flaky outcome', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult({ flakinessScore: 0.5 })],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: {},
+    };
+
+    const { html } = generateHtml(data);
+
+    expect(html).toContain('data-flaky="true"');
+  });
+
+  it('does not mark test as flaky when neither outcome nor score qualifies', () => {
+    const data: HtmlGeneratorData = {
+      results: [createMinimalTestResult({ flakinessScore: 0.1, outcome: 'expected' })],
+      history: createTestHistory(),
+      startTime: Date.now(),
+      options: {},
+    };
+
+    const { html } = generateHtml(data);
+
+    expect(html).toContain('data-flaky="false"');
+  });
+
+  describe('live section tier gating', () => {
+    it('adds live-section-gated class to section for community tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('view-panel live-section-gated');
+      expect(html).toContain('Starter');
+    });
+
+    it('does not add live-section-gated to section for starter tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'starter',
+      };
+
+      const { html } = generateHtml(data);
+
+      // The section element should not have the gated class (CSS definition will still contain the string)
+      expect(html).not.toContain('view-panel live-section-gated');
+    });
+
+    it('renders live section with gated class when live is not configured', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: {},
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).toContain('view-live');
+      expect(html).toContain('live-section-gated');
+    });
+
+    it('does not render live section when live is explicitly disabled', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: false } },
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      expect(html).not.toContain('view-live');
+    });
+
+    it('renders Starter badge on nav tab for community tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'community',
+      };
+
+      const { html } = generateHtml(data);
+
+      // The nav button for Live should contain the Starter badge
+      const navMatch = html.match(/data-view="live"[\s\S]*?<\/button>/);
+      expect(navMatch).toBeTruthy();
+      expect(navMatch![0]).toContain('Starter');
+    });
+
+    it('does not render Starter badge on nav tab for pro tier', () => {
+      const data: HtmlGeneratorData = {
+        results: [],
+        history: createTestHistory(),
+        startTime: Date.now(),
+        options: { live: { enabled: true } },
+        licenseTier: 'pro',
+      };
+
+      const { html } = generateHtml(data);
+
+      const navMatch = html.match(/data-view="live"[\s\S]*?<\/button>/);
+      expect(navMatch).toBeTruthy();
+      expect(navMatch![0]).not.toContain('Starter');
     });
   });
 });

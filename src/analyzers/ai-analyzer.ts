@@ -1,4 +1,4 @@
-import type { TestResultData, TestRecommendation, FailureCluster, SuiteStats, SmartReporterOptions } from '../types';
+import type { TestResultData, TestRecommendation, FailureCluster, SuiteStats, RunSummary } from '../types';
 
 /** Supported AI provider identifiers */
 export type AIProvider = 'anthropic' | 'openai' | 'gemini' | 'copilot' | 'ollama';
@@ -43,9 +43,6 @@ export class AIAnalyzer {
     this.copilotModel = options.copilotModel ?? process.env.COPILOT_MODEL ?? 'claude-sonnet-4-20250514';
   }
 
-  /**
-   * Add AI suggestions to failed tests (batched for performance)
-   */
   async analyzeFailed(results: TestResultData[]): Promise<void> {
     const failedTests = results.filter(
       r => r.status === 'failed' || r.status === 'timedOut'
@@ -58,9 +55,8 @@ export class AIAnalyzer {
       return;
     }
 
-    console.log(`\n🤖 Analyzing ${failedTests.length} failure(s) with AI...`);
+    console.log(`\n🤖 Analyzing ${failedTests.length} failure(s) with AI (${this.getActiveProvider()})...`);
 
-    // Process in batches of 3 concurrent requests for better performance
     const BATCH_SIZE = 3;
     for (let i = 0; i < failedTests.length; i += BATCH_SIZE) {
       const batch = failedTests.slice(i, i + BATCH_SIZE);
@@ -83,14 +79,11 @@ export class AIAnalyzer {
     console.log(`   ✅ AI analysis complete`);
   }
 
-  /**
-   * Add AI suggestions to failure clusters
-   */
   async analyzeClusters(clusters: FailureCluster[]): Promise<void> {
     if (clusters.length === 0) return;
     if (!this.isAvailable()) return;
 
-    console.log(`\n🤖 Analyzing ${clusters.length} failure cluster(s) with AI...`);
+    console.log(`\n🤖 Analyzing ${clusters.length} failure cluster(s) with AI (${this.getActiveProvider()})...`);
 
     for (const cluster of clusters) {
       try {
@@ -102,9 +95,38 @@ export class AIAnalyzer {
     }
   }
 
-  /**
-   * Generate comprehensive test recommendations
-   */
+  async analyzeSuiteHealth(
+    results: TestResultData[],
+    stats: SuiteStats,
+    failureClusters: FailureCluster[],
+    historySummaries: RunSummary[],
+  ): Promise<string | undefined> {
+    if (!this.isAvailable()) return undefined;
+
+    console.log(`\n🤖 Generating AI suite health summary (${this.getActiveProvider()})...`);
+
+    const flakyTests = results.filter(r => r.flakinessScore !== undefined && r.flakinessScore >= 0.3);
+    const slowTests = results.filter(r => r.performanceTrend?.startsWith('↑'));
+    const retryTests = results.filter(r => r.retryInfo?.needsAttention);
+
+    // Build pass-rate trend from recent history
+    const recentRuns = historySummaries.slice(-5);
+    const trendLine = recentRuns.length > 0
+      ? recentRuns.map(s => `${s.passRate}%`).join(' → ') + ` → ${stats.passRate}% (current)`
+      : `${stats.passRate}% (no prior history)`;
+
+    const prompt = this.buildSuiteHealthPrompt(stats, failureClusters, flakyTests, slowTests, retryTests, trendLine);
+
+    try {
+      const summary = await this.callAI(prompt);
+      console.log('   ✅ Suite health summary generated');
+      return summary;
+    } catch (err) {
+      console.error('Failed to generate suite health summary:', err);
+      return undefined;
+    }
+  }
+
   generateRecommendations(results: TestResultData[], stats: SuiteStats): TestRecommendation[] {
     const recommendations: TestRecommendation[] = [];
 
@@ -179,9 +201,6 @@ export class AIAnalyzer {
     return recommendations.sort((a, b) => b.priority - a.priority);
   }
 
-  /**
-   * Build prompt for individual test failure
-   */
   private buildFailurePrompt(test: TestResultData): string {
     return `Analyze this Playwright test failure and suggest a fix. Be concise (2-3 sentences max).
 
@@ -193,9 +212,6 @@ ${test.error || 'Unknown error'}
 Provide a brief, actionable suggestion to fix this failure.`;
   }
 
-  /**
-   * Build prompt for failure cluster
-   */
   private buildClusterPrompt(cluster: FailureCluster): string {
     const testTitles = cluster.tests.slice(0, 5).map(t => t.title).join('\n- ');
     const moreTests = cluster.count > 5 ? `\n... and ${cluster.count - 5} more` : '';
@@ -246,9 +262,51 @@ Provide a brief, actionable suggestion to fix these failures.`;
     return this.callOllama(prompt);
   }
 
-  /**
-   * Call Anthropic API
-   */
+  private buildSuiteHealthPrompt(
+    stats: SuiteStats,
+    clusters: FailureCluster[],
+    flakyTests: TestResultData[],
+    slowTests: TestResultData[],
+    retryTests: TestResultData[],
+    trendLine: string,
+  ): string {
+    const clusterSummary = clusters.length > 0
+      ? clusters.slice(0, 5).map(c => `- ${c.errorType} (${c.count} tests)`).join('\n')
+      : 'None';
+
+    const flakyList = flakyTests.length > 0
+      ? flakyTests.slice(0, 5).map(t => `- ${t.title} (${Math.round((t.flakinessScore ?? 0) * 100)}% failure rate)`).join('\n')
+      : 'None';
+
+    const slowList = slowTests.length > 0
+      ? slowTests.slice(0, 5).map(t => `- ${t.title} (${t.performanceTrend})`).join('\n')
+      : 'None';
+
+    return `You are a test suite health analyst. Write a concise executive summary (2-4 sentences) of this Playwright test suite's health. Use natural language, be specific about numbers, and highlight the most actionable insight. Do not use bullet points or headers — write flowing prose.
+
+Suite Stats:
+- Total: ${stats.total} tests
+- Passed: ${stats.passed}, Failed: ${stats.failed}, Skipped: ${stats.skipped}
+- Flaky: ${stats.flaky}, Slow: ${stats.slow}
+- Pass Rate: ${stats.passRate}%
+- Average Stability: ${stats.averageStability}/100
+
+Pass Rate Trend: ${trendLine}
+
+Failure Clusters:
+${clusterSummary}
+
+Flaky Tests:
+${flakyList}
+
+Performance Regressions:
+${slowList}
+
+Tests Needing Retries: ${retryTests.length}
+
+Write the summary now.`;
+  }
+
   private async callAnthropic(prompt: string): Promise<string> {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

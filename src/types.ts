@@ -151,6 +151,9 @@ export interface SmartReporterOptions {
   ollamaBaseUrl?: string;          // Default: 'http://localhost:11434'
   ollamaModel?: string;            // Default: 'codellama' (or set OLLAMA_MODEL env var)
 
+  // Gemini options
+  geminiModel?: string;            // Default: 'gemini-2.5-flash' (or set GEMINI_MODEL env var)
+
   // GitHub Copilot options (uses GitHub Models API)
   // Requires GITHUB_TOKEN env var (from `gh auth token` or PAT with copilot scope)
   copilotModel?: string;           // Default: 'claude-sonnet-4-20250514'

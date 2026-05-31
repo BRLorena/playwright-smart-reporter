@@ -9,6 +9,7 @@ export interface AIAnalyzerOptions {
   ollamaBaseUrl?: string;
   ollamaModel?: string;
   copilotModel?: string;
+  geminiModel?: string;
 }
 
 /**
@@ -29,6 +30,7 @@ export class AIAnalyzer {
   private ollamaBaseUrl: string;
   private ollamaModel: string;
   private copilotModel: string;
+  private geminiModel: string;
   private explicitProvider?: AIProvider;
 
   constructor(options: AIAnalyzerOptions = {}) {
@@ -41,6 +43,7 @@ export class AIAnalyzer {
     this.ollamaBaseUrl = options.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
     this.ollamaModel = options.ollamaModel ?? process.env.OLLAMA_MODEL ?? 'codellama';
     this.copilotModel = options.copilotModel ?? process.env.COPILOT_MODEL ?? 'claude-sonnet-4-20250514';
+    this.geminiModel = options.geminiModel ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
   }
 
   async analyzeFailed(results: TestResultData[]): Promise<void> {
@@ -363,7 +366,7 @@ Write the summary now.`;
    * Call Gemini API
    */
   private async callGemini(prompt: string): Promise<string> {
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.geminiModel}:generateContent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

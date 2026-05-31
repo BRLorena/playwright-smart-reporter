@@ -165,6 +165,7 @@ class SmartReporter implements Reporter {
       ollamaBaseUrl: options.ollamaBaseUrl,
       ollamaModel: options.ollamaModel,
       copilotModel: options.copilotModel,
+      geminiModel: options.geminiModel,
     });
     this.cloudUploader = new CloudUploader(options);
 
